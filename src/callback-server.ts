@@ -1,0 +1,141 @@
+import { createServer, type Server } from "node:http";
+
+function isNonEmptyCode(value: string | null): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+export type CallbackServer = {
+  waitForCode: (signal: AbortSignal) => Promise<string>;
+  close: () => void;
+};
+
+export type CallbackServerConfig = {
+  port: number;
+  path: string;
+  doneHtml: string;
+  failedHtml: (reason: string) => string;
+};
+
+export class OAuthCallbackError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OAuthCallbackError";
+  }
+}
+
+export class OAuthCallbackPortInUseError extends Error {
+  readonly port: number;
+
+  constructor(port: number) {
+    super(`Port ${String(port)} is already in use by another process.`);
+    this.name = "OAuthCallbackPortInUseError";
+    this.port = port;
+  }
+}
+
+/**
+ * Start a fixed-port loopback server that receives an OAuth redirect. The
+ * port is fixed because authorization servers only accept the registered
+ * redirect_uri for the client. A bind failure means the port is already in
+ * use (e.g. a concurrent login), not a cue to pick another port.
+ *
+ * `expectedState` is bound before listen so a redirect that arrives the
+ * instant the socket opens is CSRF-checked. The outcome is buffered: no
+ * Promise is created until `waitForCode`, so an early failed redirect
+ * cannot become an unhandled rejection.
+ */
+export async function startCallbackServer(
+  expectedState: string,
+  config: CallbackServerConfig,
+): Promise<CallbackServer> {
+  let outcome: { code: string } | { error: Error } | undefined;
+  let waiter:
+    | { resolve: (code: string) => void; reject: (err: Error) => void }
+    | undefined;
+  let wait: Promise<string> | undefined;
+  let settled = false;
+
+  const finish = (next: { code: string } | { error: Error }): void => {
+    if (settled) return;
+    settled = true;
+    outcome = next;
+    if (waiter === undefined) return;
+    if ("error" in next) waiter.reject(next.error);
+    else waiter.resolve(next.code);
+  };
+
+  const server: Server = createServer((req, res) => {
+    const url = new URL(
+      req.url ?? "/",
+      `http://127.0.0.1:${String(config.port)}`,
+    );
+    if (url.pathname !== config.path) {
+      res.statusCode = 404;
+      res.end("Not found");
+      return;
+    }
+    const code = url.searchParams.get("code");
+    const error = url.searchParams.get("error");
+    const state = url.searchParams.get("state");
+
+    if (state !== expectedState) {
+      res.statusCode = 400;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.end(config.failedHtml("state mismatch"));
+      finish({
+        error: new OAuthCallbackError(
+          "Authorization state did not match; possible CSRF - login aborted.",
+        ),
+      });
+      return;
+    }
+
+    const reason =
+      error ?? (isNonEmptyCode(code) ? undefined : "no code returned");
+    res.statusCode = reason === undefined ? 200 : 400;
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(reason === undefined ? config.doneHtml : config.failedHtml(reason));
+
+    if (reason !== undefined || !isNonEmptyCode(code)) {
+      finish({
+        error: new OAuthCallbackError(
+          `Authorization failed: ${reason ?? "no code returned"}`,
+        ),
+      });
+    } else {
+      finish({ code });
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE")
+        reject(new OAuthCallbackPortInUseError(config.port));
+      else reject(err);
+    });
+    server.listen(config.port, "127.0.0.1", resolve);
+  });
+
+  return {
+    waitForCode: (signal: AbortSignal) => {
+      if (signal.aborted) finish({ error: new OAuthCallbackError("aborted") });
+      else
+        signal.addEventListener(
+          "abort",
+          () => finish({ error: new OAuthCallbackError("aborted") }),
+          { once: true },
+        );
+      if (wait !== undefined) return wait;
+      wait = new Promise<string>((resolve, reject) => {
+        if (outcome !== undefined) {
+          if ("error" in outcome) reject(outcome.error);
+          else resolve(outcome.code);
+          return;
+        }
+        waiter = { resolve, reject };
+      });
+      return wait;
+    },
+    close: () => server.close(),
+  };
+}
