@@ -51,6 +51,9 @@ const handle = await startOAuthLogin(
     startCallbackServer: (state) =>
       startCallbackServer(state, {
         port: 8765,
+        // Optional loopback hostname or address; defaults to 127.0.0.1.
+        // Routable and wildcard hosts are rejected.
+        host: "127.0.0.1",
         path: "/callback",
         doneHtml:
           "<html><body>Signed in — you can close this tab.</body></html>",
@@ -116,9 +119,11 @@ See `src/index.ts` for the full export surface.
 - No confidential client / client secret support — public clients (PKCE)
   only.
 - No token revocation endpoint call.
-- Fixed-port loopback only, no dynamic port selection: authorization
-  servers only accept the registered `redirect_uri` for the client, so a
-  randomly chosen port would be rejected.
+- Fixed-port, loopback-only callback binding with configurable host selection
+  (`127.0.0.1`, `localhost`, or `::1`); wildcard and routable hosts are
+  rejected. There is no dynamic port selection: authorization servers only
+  accept the registered `redirect_uri` for the client, so a randomly chosen
+  port would be rejected.
 
 ## License
 
