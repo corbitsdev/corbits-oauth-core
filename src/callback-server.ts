@@ -8,7 +8,7 @@ function isLoopbackAddress(address: string): boolean {
   return address.split(".")[0] === "127";
 }
 
-async function resolveLoopbackHost(host: string): Promise<void> {
+async function resolveLoopbackHost(host: string): Promise<string> {
   let addresses: string[];
   try {
     addresses =
@@ -31,6 +31,18 @@ async function resolveLoopbackHost(host: string): Promise<void> {
       `OAuth callback host must resolve to loopback-only addresses; received ${host}.`,
     );
   }
+
+  // Prefer IPv4 when both loopback families are available so localhost
+  // callers use the same address family as the default callback host.
+  const ipv4 = addresses.find((address) => isIP(address) === 4);
+  if (ipv4 !== undefined) return ipv4;
+  const first = addresses[0];
+  if (first === undefined) {
+    throw new Error(
+      `OAuth callback host must resolve to loopback-only addresses; received ${host}.`,
+    );
+  }
+  return first;
 }
 
 function isNonEmptyCode(value: string | null): value is string {
@@ -93,7 +105,7 @@ export async function startCallbackServer(
   config: CallbackServerConfig,
 ): Promise<CallbackServer> {
   const host = config.host ?? "127.0.0.1";
-  await resolveLoopbackHost(host);
+  const bindHost = await resolveLoopbackHost(host);
 
   let outcome: { code: string } | { error: Error } | undefined;
   let waiter:
@@ -160,7 +172,7 @@ export async function startCallbackServer(
         reject(new OAuthCallbackPortInUseError(config.port, host));
       else reject(err);
     });
-    server.listen(config.port, host, resolve);
+    server.listen(config.port, bindHost, resolve);
   });
 
   const address = server.address();

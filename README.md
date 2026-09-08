@@ -103,6 +103,9 @@ See `src/index.ts` for the full export surface.
 - `startOAuthLogin` stages the exchanged profile behind a `commit()` the
   caller controls, so persistence can be gated on the host's own setup
   succeeding first.
+- Callback hostnames are resolved once before binding. Every returned address
+  must be loopback (`127.0.0.0/8` or `::1`), and the validated address is bound
+  directly; wildcard and routable hosts are rejected.
 - The token session coalesces concurrent refreshes for the same profile
   into one in-flight request, since a provider that rotates refresh tokens
   would otherwise invalidate a racing second attempt. Interchange's harness
