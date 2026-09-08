@@ -11,6 +11,7 @@ export type CallbackServer = {
 
 export type CallbackServerConfig = {
   port: number;
+  host?: string;
   path: string;
   doneHtml: string;
   failedHtml: (reason: string) => string;
@@ -113,7 +114,7 @@ export async function startCallbackServer(
         reject(new OAuthCallbackPortInUseError(config.port));
       else reject(err);
     });
-    server.listen(config.port, "127.0.0.1", resolve);
+    server.listen(config.port, config.host ?? "127.0.0.1", resolve);
   });
 
   return {
