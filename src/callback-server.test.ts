@@ -3,6 +3,26 @@ import { describe, expect, test } from "bun:test";
 import { startCallbackServer } from "./index";
 
 describe("Callback server startCallbackServer — state validation", () => {
+  test("listens on the configured host", async () => {
+    const server = await startCallbackServer("expected-state", {
+      port: 18235,
+      host: "::1",
+      path: "/callback",
+      doneHtml: "<html>done</html>",
+      failedHtml: (reason) => `<html>failed: ${reason}</html>`,
+    });
+    try {
+      const waiting = server.waitForCode(new AbortController().signal);
+      const response = await fetch(
+        "http://[::1]:18235/callback?code=some-code&state=expected-state",
+      );
+      expect(response.status).toBe(200);
+      await expect(waiting).resolves.toBe("some-code");
+    } finally {
+      server.close();
+    }
+  });
+
   test("rejects a redirect whose state does not match, without trusting the code", async () => {
     // Load-bearing: the state check is what stops a redirect from an
     // unrelated flow (or an attacker's crafted link) from being accepted as

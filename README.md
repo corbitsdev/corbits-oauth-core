@@ -51,6 +51,8 @@ const handle = await startOAuthLogin(
     startCallbackServer: (state) =>
       startCallbackServer(state, {
         port: 8765,
+        // Optional; defaults to 127.0.0.1.
+        host: "127.0.0.1",
         path: "/callback",
         doneHtml:
           "<html><body>Signed in — you can close this tab.</body></html>",
