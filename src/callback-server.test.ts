@@ -23,7 +23,10 @@ describe("Callback server startCallbackServer — state validation", () => {
   test.each([undefined, "127.0.0.1", "localhost", "::1"])(
     "listens on loopback host %s",
     async (host) => {
-      const server = await startCallbackServer("expected-state", config(0, host));
+      const server = await startCallbackServer(
+        "expected-state",
+        config(0, host),
+      );
       server.close();
     },
   );
