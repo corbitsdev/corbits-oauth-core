@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  OAuthCallbackAddressUnavailableError,
   OAuthCallbackPortInUseError,
   startCallbackServer,
   type CallbackServer,
@@ -86,6 +87,14 @@ describe("Callback server startCallbackServer — state validation", () => {
     expect(error.port).toBe(1234);
     expect(error.host).toBeUndefined();
     expect(error.message).not.toContain("undefined");
+  });
+
+  test("names an unavailable address with host and port", () => {
+    const error = new OAuthCallbackAddressUnavailableError(1234, "127.0.0.99");
+    expect(error.name).toBe("OAuthCallbackAddressUnavailableError");
+    expect(error).toMatchObject({ port: 1234, host: "127.0.0.99" });
+    expect(error.message).toContain("127.0.0.99");
+    expect(error.message).toContain("1234");
   });
 
   test("rejects a redirect whose state does not match, without trusting the code", async () => {

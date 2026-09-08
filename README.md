@@ -105,7 +105,10 @@ See `src/index.ts` for the full export surface.
   succeeding first.
 - Callback hostnames are resolved once before binding. Every returned address
   must be loopback (`127.0.0.0/8` or `::1`), and the validated address is bound
-  directly; wildcard and routable hosts are rejected.
+  directly; wildcard and routable hosts are rejected. This is a cleartext
+  safeguard: the redirect carrying the authorization code travels as plain
+  HTTP, so a routable or wildcard bind would expose it on the network where
+  passive capture defeats the state check.
 - The token session coalesces concurrent refreshes for the same profile
   into one in-flight request, since a provider that rotates refresh tokens
   would otherwise invalidate a racing second attempt. Interchange's harness

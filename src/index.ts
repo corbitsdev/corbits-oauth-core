@@ -6,6 +6,7 @@ export {
   startCallbackServer,
   OAuthCallbackError,
   OAuthCallbackPortInUseError,
+  OAuthCallbackAddressUnavailableError,
   type CallbackServer,
   type CallbackServerConfig,
 } from "./callback-server";

@@ -87,11 +87,28 @@ export class OAuthCallbackPortInUseError extends Error {
   }
 }
 
+export class OAuthCallbackAddressUnavailableError extends Error {
+  readonly port: number;
+  readonly host: string;
+
+  constructor(port: number, host: string) {
+    super(
+      `Address ${host}:${String(port)} is not available on this machine; the callback server cannot bind it.`,
+    );
+    this.name = "OAuthCallbackAddressUnavailableError";
+    this.port = port;
+    this.host = host;
+  }
+}
+
 /**
  * Start a fixed-port loopback-only server that receives an OAuth redirect.
  * The optional host may select a loopback hostname or address; routable and
  * wildcard hosts are rejected. The port is fixed because authorization
- * servers only accept the registered redirect_uri for the client. A bind
+ * servers only accept the registered redirect_uri for the client. Loopback-only
+ * enforcement is a cleartext safeguard: the redirect carrying the authorization
+ * code travels as plain HTTP, so a routable or wildcard bind would expose it on
+ * the network where passive capture defeats the state check. A bind
  * failure means the port is already in use (e.g. a concurrent login), not a
  * cue to pick another port.
  *
@@ -170,6 +187,8 @@ export async function startCallbackServer(
     server.once("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE")
         reject(new OAuthCallbackPortInUseError(config.port, host));
+      else if (err.code === "EADDRNOTAVAIL")
+        reject(new OAuthCallbackAddressUnavailableError(config.port, host));
       else reject(err);
     });
     server.listen(config.port, bindHost, resolve);
