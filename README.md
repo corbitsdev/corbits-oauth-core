@@ -51,6 +51,8 @@ const handle = await startOAuthLogin(
     startCallbackServer: (state) =>
       startCallbackServer(state, {
         port: 8765,
+        // Optional; defaults to 127.0.0.1.
+        host: "127.0.0.1",
         path: "/callback",
         doneHtml:
           "<html><body>Signed in — you can close this tab.</body></html>",
@@ -101,6 +103,12 @@ See `src/index.ts` for the full export surface.
 - `startOAuthLogin` stages the exchanged profile behind a `commit()` the
   caller controls, so persistence can be gated on the host's own setup
   succeeding first.
+- Callback hostnames are resolved once before binding. Every returned address
+  must be loopback (`127.0.0.0/8` or `::1`), and the validated address is bound
+  directly; wildcard and routable hosts are rejected. This is a cleartext
+  safeguard: the redirect carrying the authorization code travels as plain
+  HTTP, so a routable or wildcard bind would expose it on the network where
+  passive capture defeats the state check.
 - The token session coalesces concurrent refreshes for the same profile
   into one in-flight request, since a provider that rotates refresh tokens
   would otherwise invalidate a racing second attempt. Interchange's harness
