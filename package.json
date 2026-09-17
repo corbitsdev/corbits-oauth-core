@@ -44,5 +44,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/corbitsdev/corbits-oauth-core.git"
+  },
+  "homepage": "https://github.com/corbitsdev/corbits-oauth-core",
+  "bugs": {
+    "url": "https://github.com/corbitsdev/corbits-oauth-core/issues"
   }
 }

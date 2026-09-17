@@ -12,11 +12,13 @@ fixed-port loopback, no client secret.
 ## Install
 
 ```sh
-bun add github:corbitsdev/corbits-oauth-core
+bun add @corbits/oauth-core
+# or
+npm install @corbits/oauth-core
 ```
 
-The package ships TypeScript source and needs no build step; Bun consumes it
-directly.
+The package ships TypeScript source and needs no build step. It requires
+Bun >= 1.2, which consumes the TypeScript source directly.
 
 ## Usage
 

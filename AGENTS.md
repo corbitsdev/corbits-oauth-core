@@ -43,9 +43,9 @@ bun run check   # typecheck + lint + format:check + test
 
 ## Distribution
 
-The package ships TypeScript source: `exports` points at `src/index.ts`,
-there is no build step and no `dist/`. Consumers install it straight from
-git (`bun add github:corbitsdev/corbits-oauth-core`) and Bun runs the source
-as-is, so a change here is consumable the moment it is pushed. An npm
-publish, if one is ever wanted, is `npm publish --access public` on a version
-bump with no other preparation.
+The package ships TypeScript source on npm as `@corbits/oauth-core`:
+`exports` points at `src/index.ts`, there is no build step and no `dist/`.
+Consumers install the published package (`bun add @corbits/oauth-core` or
+`npm install @corbits/oauth-core`) on Bun >= 1.2, which runs the source
+as-is. A release is a version bump followed by
+`npm publish --access public` with no other preparation.
