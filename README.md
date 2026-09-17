@@ -130,4 +130,4 @@ See `src/index.ts` for the full export surface.
 
 ## License
 
-LGPL-2.1-or-later.
+LGPL-2.1-only. See LICENSE.

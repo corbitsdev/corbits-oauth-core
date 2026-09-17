@@ -2,7 +2,7 @@
   "name": "@corbits/oauth-core",
   "version": "0.1.0",
   "description": "Provider-agnostic OAuth 2.0 authorization-code + PKCE login for desktop/CLI hosts.",
-  "license": "LGPL-2.1-or-later",
+  "license": "LGPL-2.1-only",
   "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
   "type": "module",
   "sideEffects": false,
