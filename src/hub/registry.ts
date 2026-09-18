@@ -15,6 +15,15 @@ export type OAuthLoginProvider = {
     now: number,
   ) => Promise<BaseTokens>;
   /**
+   * Redeems a stored refresh token for a fresh access token, ahead of
+   * expiry. Absent when the provider issues no refreshable token: its
+   * credentials are then left for the person to sign in again.
+   */
+  readonly refresh?: (
+    refreshSecret: string,
+    now: number,
+  ) => Promise<BaseTokens>;
+  /**
    * Credential metadata derived from the freshly-minted tokens — an account
    * id a provider needs on every inference request, say. Never the raw
    * id_token: the credential row is not a place to park a bearer assertion.

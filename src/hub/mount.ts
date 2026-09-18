@@ -129,6 +129,7 @@ export function mountOAuthLogin(
             tenantId,
             principalId,
             providerId: body.providerId,
+            provider: body.provider,
             name: body.credentialName,
             scopes: provider.oauthConfig.scopes,
             tokens: staged.profile.tokens,

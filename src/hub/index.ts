@@ -6,5 +6,18 @@ export {
   type OAuthLoginProvider,
   type OAuthLoginProviders,
 } from "./registry";
-export { persistOAuthCredential } from "./credentials";
+export {
+  persistOAuthCredential,
+  OAUTH_PROVIDER_METADATA_KEY,
+} from "./credentials";
+export {
+  createOAuthRefreshStore,
+  createOAuthTokenRefresher,
+  createRefreshTicker,
+  type ClaimedCredential,
+  type DueCredential,
+  type OAuthRefreshStore,
+  type OAuthTokenRefresher,
+  type OAuthTokenRefresherOpts,
+} from "./refresh";
 export type { LoginState } from "./login-store";

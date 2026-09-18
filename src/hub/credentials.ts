@@ -6,6 +6,63 @@ import { eq } from "drizzle-orm";
 
 import type { BaseTokens } from "../index";
 
+/**
+ * Credential-metadata key naming the registered provider the tokens were
+ * minted by. The stock `provider` row a credential hangs off is host-named
+ * and per-tenant, so it cannot identify a registry entry; this key can, and
+ * it is what the refresher matches a credential against.
+ */
+export const OAUTH_PROVIDER_METADATA_KEY = "oauthProvider";
+
+/** Everything the token writes below need — a `db` or an open transaction. */
+export type OAuthCredentialWriter = Pick<DB["db"], "update">;
+
+export type WriteOAuthTokensOpts = {
+  readonly db: OAuthCredentialWriter;
+  readonly cipher: CredentialCipher;
+  readonly credentialId: string;
+  readonly tokens: BaseTokens;
+  readonly metadata: Record<string, string>;
+  readonly scopes?: readonly string[];
+  readonly providerId?: string;
+};
+
+/**
+ * Write token material onto an existing credential row: both secrets are
+ * sealed under the AAD the platform's own read path expects. Login and
+ * refresh share this one write so a refreshed row is indistinguishable from
+ * a freshly signed-in one.
+ */
+export async function writeOAuthTokens(
+  opts: WriteOAuthTokensOpts,
+): Promise<void> {
+  const secret = await opts.cipher.encrypt(
+    opts.tokens.access,
+    credentialAad(opts.credentialId, "secret"),
+  );
+  const refreshSecret = await opts.cipher.encrypt(
+    opts.tokens.refresh,
+    credentialAad(opts.credentialId, "refreshSecret"),
+  );
+  await opts.db
+    .update(credential)
+    .set({
+      ...(opts.providerId !== undefined ? { providerId: opts.providerId } : {}),
+      ...(opts.scopes !== undefined ? { scopes: [...opts.scopes] } : {}),
+      type: "oauth_token",
+      secret,
+      refreshSecret,
+      expiresAt:
+        opts.tokens.expiresAt === undefined
+          ? null
+          : new Date(opts.tokens.expiresAt),
+      status: "active",
+      metadata: opts.metadata,
+      updatedAt: new Date(),
+    })
+    .where(eq(credential.id, opts.credentialId));
+}
+
 export type PersistOAuthCredentialOpts = {
   readonly db: DB["db"];
   readonly cipher: CredentialCipher;
@@ -13,6 +70,8 @@ export type PersistOAuthCredentialOpts = {
   readonly principalId: string;
   /** The stock `provider` row the credential hangs off; the host mints it. */
   readonly providerId: string;
+  /** The registered provider key, recorded so a refresher can find it again. */
+  readonly provider: string;
   readonly name: string;
   readonly scopes: readonly string[];
   readonly tokens: BaseTokens;
@@ -37,6 +96,24 @@ export async function persistOAuthCredential(
 
   const now = new Date();
   const credentialId = existing?.id ?? generateId("credential");
+  const metadata = {
+    ...opts.metadata,
+    [OAUTH_PROVIDER_METADATA_KEY]: opts.provider,
+  };
+
+  if (existing !== undefined) {
+    await writeOAuthTokens({
+      db: opts.db,
+      cipher: opts.cipher,
+      credentialId,
+      tokens: opts.tokens,
+      metadata,
+      scopes: opts.scopes,
+      providerId: opts.providerId,
+    });
+    return credentialId;
+  }
+
   const secret = await opts.cipher.encrypt(
     opts.tokens.access,
     credentialAad(credentialId, "secret"),
@@ -49,24 +126,6 @@ export async function persistOAuthCredential(
     opts.tokens.expiresAt === undefined
       ? null
       : new Date(opts.tokens.expiresAt);
-
-  if (existing !== undefined) {
-    await opts.db
-      .update(credential)
-      .set({
-        providerId: opts.providerId,
-        type: "oauth_token",
-        secret,
-        refreshSecret,
-        scopes: [...opts.scopes],
-        expiresAt,
-        status: "active",
-        metadata: opts.metadata,
-        updatedAt: now,
-      })
-      .where(eq(credential.id, credentialId));
-    return credentialId;
-  }
 
   await opts.db.transaction(async (tx) => {
     await tx.insert(credential).values({
@@ -82,7 +141,7 @@ export async function persistOAuthCredential(
       refreshSecret,
       scopes: [...opts.scopes],
       expiresAt,
-      metadata: opts.metadata,
+      metadata,
       createdAt: now,
       updatedAt: now,
     });
