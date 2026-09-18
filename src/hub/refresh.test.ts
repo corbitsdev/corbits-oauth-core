@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 
-import type { BaseTokens } from "../index";
-import { createRefreshTicker, type OAuthRefreshStore } from "./refresh";
+import { OAuthTokenEndpointError, type BaseTokens } from "../index";
+import {
+  createRefreshTicker,
+  refreshCredential,
+  type OAuthRefreshStore,
+} from "./refresh";
 import type { OAuthLoginProviders } from "./registry";
 
 const MINUTE = 60_000;
@@ -174,5 +178,78 @@ describe("createRefreshTicker", () => {
     });
     expect(written).toEqual([]);
     expect(errors).toEqual([]);
+  });
+});
+
+describe("refreshCredential", () => {
+  it("reports reauth when the provider rejects the refresh token", async () => {
+    const { store, written } = fakeStore({
+      id: "cred_1",
+      tenantId: "tenant_1",
+      provider: "acme",
+      expiresAt: new Date(Date.now() + MINUTE),
+    });
+    const result = await refreshCredential(
+      store,
+      {
+        providers: providers(() =>
+          Promise.reject(new OAuthTokenEndpointError(400, "invalid_grant")),
+        ),
+        marginMs: 10 * MINUTE,
+      },
+      { id: "cred_1", tenantId: "tenant_1", provider: "acme" },
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: "reauth",
+      message: String(new OAuthTokenEndpointError(400, "invalid_grant")),
+    });
+    expect(written).toEqual([]);
+  });
+
+  it("reports error on a thrown failure that is not a provider rejection", async () => {
+    const { store, written } = fakeStore({
+      id: "cred_1",
+      tenantId: "tenant_1",
+      provider: "acme",
+      expiresAt: new Date(Date.now() + MINUTE),
+    });
+    const result = await refreshCredential(
+      store,
+      {
+        providers: providers(() => Promise.reject(new Error("network down"))),
+        marginMs: 10 * MINUTE,
+      },
+      { id: "cred_1", tenantId: "tenant_1", provider: "acme" },
+    );
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toBe("error");
+    expect(written).toEqual([]);
+  });
+});
+
+describe("createRefreshTicker start()", () => {
+  it("performs a pass before the first interval tick", async () => {
+    const { store, written } = fakeStore({
+      id: "cred_1",
+      tenantId: "tenant_1",
+      provider: "acme",
+      expiresAt: new Date(Date.now() + MINUTE),
+    });
+    const ticker = createRefreshTicker(store, {
+      providers: providers((refreshSecret) =>
+        Promise.resolve({
+          access: `access-for-${refreshSecret}`,
+          refresh: "next-refresh",
+        }),
+      ),
+      marginMs: 10 * MINUTE,
+      intervalMs: 10 * MINUTE,
+    });
+    ticker.start();
+    // No timer tick has fired yet; the boot-time pass already ran.
+    await flush();
+    ticker.stop();
+    expect(written).toHaveLength(1);
   });
 });

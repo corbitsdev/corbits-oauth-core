@@ -138,9 +138,14 @@ no raw `id_token` is ever stored -- a provider that needs an account id
 supplies a `metadata` projection instead. Logins expire (five minutes by
 default) so an abandoned one releases its fixed loopback port.
 
-Nothing here refreshes an expiring credential at serving time. That is the
-host's `ServingRefresh` seam, and a host that wants it wires the provider
-package's own refresh there.
+`createOAuthTokenRefresher` walks `oauth_token` credentials ahead of expiry
+on a timer, since stock Interchange has no serving-time refresh hook.
+`start()` runs one pass immediately, so tokens that lapsed while the hub
+was down are fresh before anything re-registers, then arms the interval;
+`stop()` clears the interval and lets an in-flight pass finish. Its
+per-credential decision (claim, refresh, write) is also exported as
+`refreshCredential`, the shape a future Interchange serving-time hook
+would call directly for one credential.
 
 ## Design notes
 
