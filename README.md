@@ -95,6 +95,53 @@ const accessToken = await session.getValidToken("default");
 
 See `src/index.ts` for the full export surface.
 
+## Hub mount (`@corbits/oauth-core/hub`)
+
+A server-only subpath for an Interchange hub that wants a browser-driven
+login: the person clicks a button in a web client, the hub runs the whole
+loopback PKCE flow in its own process, and the browser only ever sees an
+authorize URL, a login id, and -- on success -- the id of the credential
+the tokens were stored under.
+
+```ts
+import { mountOAuthLogin } from "@corbits/oauth-core/hub";
+
+const api = new Hono<TenantEnv>();
+mountOAuthLogin(api, {
+  db,
+  cipher: credentialCipher,
+  requireGrant: requireGrant("credential:*", "create"),
+  providers: {
+    // The host owns the provider packages; this library never imports one.
+    someProvider: {
+      oauthConfig,
+      exchange: (code, verifier, now) => exchangeSomeCode(code, verifier, now),
+    },
+  },
+});
+app.route("/api/tenants/:tenantId", api);
+```
+
+Routes, all under the tenant prefix the host mounts them on:
+
+| Route                           | What it does                                                            |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `GET /oauth-logins/providers`   | The provider names this host registered.                                |
+| `POST /oauth-logins`            | Starts a login; returns `{ loginId, authorizeUrl }`.                    |
+| `GET /oauth-logins/:loginId`    | `pending` / `completed` (with `credentialId`) / `failed` / `cancelled`. |
+| `DELETE /oauth-logins/:loginId` | Cancels an abandoned login and frees its fixed callback port.           |
+
+The tokens are written as a stock `oauth_token` credential with the same
+row shape, AAD-bound encryption and creator grant the platform's own
+`POST /credentials` writes. The PKCE verifier never leaves the process and
+no raw `id_token` is ever stored -- a provider that needs an account id
+supplies a `metadata` projection instead. Logins expire (five minutes by
+default) so an abandoned one releases its fixed loopback port.
+
+Nothing here refreshes an expiring credential at serving time. That is the
+host's `ServingRefresh` seam, and a host that wants it wires the provider
+package's own refresh there.
+
 ## Design notes
 
 - Nothing here names a provider, product, or default client id — config and

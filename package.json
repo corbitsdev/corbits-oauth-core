@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Provider-agnostic OAuth 2.0 authorization-code + PKCE login for desktop/CLI hosts.",
   "license": "LGPL-2.1-only",
-  "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
+  "author": "Corbits",
   "type": "module",
   "sideEffects": false,
   "files": [
@@ -16,7 +16,8 @@
     "access": "public"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./hub": "./src/hub/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -27,7 +28,13 @@
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "dependencies": {
-    "arktype": "2.2.3"
+    "arktype": "2.2.3",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.11.9",
+    "@intx/db": "^0.3.0",
+    "@intx/hub-api": "^0.3.0",
+    "@intx/hub-common": "^0.3.0",
+    "@intx/types": "^0.3.0"
   },
   "devDependencies": {
     "@eslint/js": "9.34.0",
