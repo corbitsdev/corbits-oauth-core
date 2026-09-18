@@ -4,7 +4,7 @@ import { credentialAad, type CredentialCipher } from "@intx/types";
 import { type } from "arktype";
 import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 
-import type { BaseTokens } from "../index";
+import { OAuthTokenEndpointError, type BaseTokens } from "../index";
 import { OAUTH_PROVIDER_METADATA_KEY, writeOAuthTokens } from "./credentials";
 import type { OAuthLoginProviders } from "./registry";
 
@@ -70,6 +70,71 @@ export type OAuthTokenRefresherOpts = {
 
 function dueAt(expiresAt: Date | null, deadline: number): boolean {
   return expiresAt !== null && expiresAt.getTime() <= deadline;
+}
+
+// A rejected token-endpoint call (invalid_grant and friends) means the
+// refresh token itself is dead — only a fresh sign-in fixes it. Anything
+// else (network, decrypt, our own bugs) is retried on the next pass.
+function isReauthError(error: unknown): boolean {
+  return error instanceof OAuthTokenEndpointError;
+}
+
+export type RefreshCredentialResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: "reauth" | "error";
+      readonly message: string;
+    };
+
+/**
+ * Claim, refresh, and write one due credential. This holds the decision the
+ * ticker makes on every row it walks; it is also the shape a future
+ * Interchange serving-time hook would call directly for a single credential.
+ */
+export async function refreshCredential(
+  store: OAuthRefreshStore,
+  opts: Omit<OAuthTokenRefresherOpts, "db" | "cipher">,
+  due: DueCredential,
+): Promise<RefreshCredentialResult> {
+  const marginMs = opts.marginMs ?? DEFAULT_MARGIN_MS;
+  const deadline = Date.now() + marginMs;
+  const provider = opts.providers[due.provider];
+  const refresh = provider?.refresh;
+  // A provider that cannot refresh leaves its credentials to a sign-in.
+  if (provider === undefined || refresh === undefined) {
+    return {
+      ok: false,
+      reason: "reauth",
+      message: `provider "${due.provider}" has no refresh`,
+    };
+  }
+  try {
+    const written = await store.claim(due.id, async (row) => {
+      // Re-checked under the lock: another hub may have renewed it since.
+      if (!dueAt(row.expiresAt, deadline)) return null;
+      const tokens = await refresh(row.refreshSecret, Date.now());
+      // The prior metadata is carried forward: a refresh response may omit
+      // what the first exchange established (an account id, say).
+      return {
+        tokens,
+        metadata: { ...row.metadata, ...(provider.metadata?.(tokens) ?? {}) },
+      };
+    });
+    if (written) {
+      await opts.onRefreshed?.({
+        tenantId: due.tenantId,
+        credentialId: due.id,
+      });
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: isReauthError(error) ? "reauth" : "error",
+      message: String(error),
+    };
+  }
 }
 
 /**
@@ -172,29 +237,7 @@ export function createRefreshTicker(
   const marginMs = opts.marginMs ?? DEFAULT_MARGIN_MS;
   let timer: ReturnType<typeof setInterval> | undefined;
   let ticking = false;
-
-  async function refreshOne(due: DueCredential, deadline: number) {
-    const provider = opts.providers[due.provider];
-    const refresh = provider?.refresh;
-    // A provider that cannot refresh leaves its credentials to a sign-in.
-    if (provider === undefined || refresh === undefined) return;
-    const written = await store.claim(due.id, async (row) => {
-      // Re-checked under the lock: another hub may have renewed it since.
-      if (!dueAt(row.expiresAt, deadline)) return null;
-      const tokens = await refresh(row.refreshSecret, Date.now());
-      // The prior metadata is carried forward: a refresh response may omit
-      // what the first exchange established (an account id, say).
-      return {
-        tokens,
-        metadata: { ...row.metadata, ...(provider.metadata?.(tokens) ?? {}) },
-      };
-    });
-    if (!written) return;
-    await opts.onRefreshed?.({
-      tenantId: due.tenantId,
-      credentialId: due.id,
-    });
-  }
+  let stopped = true;
 
   async function tick() {
     if (ticking) return;
@@ -206,12 +249,12 @@ export function createRefreshTicker(
         Object.keys(opts.providers),
       );
       for (const candidate of due) {
-        try {
-          await refreshOne(candidate, deadline);
-        } catch (error) {
-          // One credential's failure is never the ticker's: the next tick
-          // retries, and the person can always sign in again.
-          opts.onError?.(error, {
+        const result = await refreshCredential(store, opts, candidate);
+        // A "reauth" outcome (no refresh capability, or the provider
+        // rejected the refresh token) is expected and silent — the person
+        // signs in again. Anything else is worth surfacing.
+        if (!result.ok && result.reason === "error") {
+          opts.onError?.(new Error(result.message), {
             provider: candidate.provider,
             credentialId: candidate.id,
           });
@@ -226,14 +269,22 @@ export function createRefreshTicker(
 
   return {
     start() {
-      if (timer !== undefined) return;
-      timer = setInterval(() => void tick(), intervalMs);
-      void tick();
+      if (!stopped) return;
+      stopped = false;
+      // Awaited internally so a token that lapsed while the hub was down is
+      // fresh before sidecars re-register; start() itself stays sync.
+      void tick().finally(() => {
+        if (!stopped) {
+          timer = setInterval(() => void tick(), intervalMs);
+        }
+      });
     },
     stop() {
-      if (timer === undefined) return;
-      clearInterval(timer);
-      timer = undefined;
+      stopped = true;
+      if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
     },
   };
 }
