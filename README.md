@@ -17,8 +17,10 @@ bun add @corbits/oauth-core
 npm install @corbits/oauth-core
 ```
 
-The package ships TypeScript source and needs no build step. It requires
-Bun >= 1.2, which consumes the TypeScript source directly.
+The package ships TypeScript source and needs no build step. Bun >= 1.2
+consumes the TypeScript source directly. Node.js >= 24 is the engines
+floor for published-dist consumers — native Node does not load this
+extensionless TypeScript source as-is.
 
 ## Usage
 
