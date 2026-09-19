@@ -41,3 +41,15 @@ export {
   type TokenSession,
   type TokenSessionDeps,
 } from "./session";
+
+export {
+  discoverMcpLoginEntry,
+  registerMcpClient,
+  mcpClientConfig,
+  OAuthDiscoveryError,
+  type DiscoverMcpLoginEntryOptions,
+  type McpAuthorizationServer,
+  type McpClientConfigOptions,
+  type McpLoginEntry,
+  type RegisterMcpClientOptions,
+} from "./discovery";
