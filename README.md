@@ -2,7 +2,11 @@
 
 PKCE + loopback OAuth for an Interchange host: mint an access token the harness injects as `InferenceSource.apiKey`. A loopback callback server, token exchange/refresh, and an expiring-token session that refreshes ahead of expiry and coalesces concurrent refreshes. It is not a vault and not a client for any particular issuer — endpoints and client id come from the caller.
 
-## Install
+## Runtime support
+
+Bun >= 1.2 runs the published TypeScript source. Node >= 24 is an engines floor for tooling; native Node does not load this extensionless TypeScript source as-is.
+
+## Quickstart
 
 ```sh
 npm add @corbits/oauth-core
@@ -10,10 +14,6 @@ pnpm add @corbits/oauth-core
 yarn add @corbits/oauth-core
 bun add @corbits/oauth-core
 ```
-
-Requires Node >= 24 and Bun >= 1.2. The package ships TypeScript source; Bun consumes it directly. Node does not load this extensionless TypeScript source as-is.
-
-## Use
 
 One flow shape: public client, PKCE S256, fixed-port loopback, no client secret.
 
@@ -43,8 +43,6 @@ void config;
 ```
 
 Typical callers: `@corbits/xai-provider`, `@corbits/codex-provider`.
-
-## Full example
 
 ```ts
 import {
@@ -137,9 +135,11 @@ mountOAuthLogin(api, {
 
 Nothing here names a provider — config and callback HTML are caller-supplied; persistence is a host callback. `startOAuthLogin` stages the exchanged profile behind `commit()`. Callback binds are loopback only (`127.0.0.0/8` or `::1`); the redirect carrying the code is cleartext HTTP. The token session coalesces concurrent refreshes for the same profile. The hub subpath runs that loop in-process and writes a stock `oauth_token` credential; `createOAuthTokenRefresher` walks those credentials ahead of expiry.
 
-## Contributing
+## Development
 
 ```sh
+git clone https://github.com/corbitsdev/corbits-oauth-core.git
+cd corbits-oauth-core
 bun install
 bun run typecheck
 bun run lint
