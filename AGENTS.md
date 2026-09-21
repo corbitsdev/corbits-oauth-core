@@ -47,5 +47,7 @@ The package ships TypeScript source on npm as `@corbits/oauth-core`:
 `exports` points at `src/index.ts`, there is no build step and no `dist/`.
 Consumers install the published package (`bun add @corbits/oauth-core` or
 `npm install @corbits/oauth-core`) on Bun >= 1.2, which runs the source
-as-is. A release is a version bump followed by
-`npm publish --access public` with no other preparation.
+as-is. Node.js >= 24 is the engines floor for published-dist consumers;
+native Node does not load this extensionless TypeScript source. A release
+is a version bump followed by `npm publish --access public` with no other
+preparation.
