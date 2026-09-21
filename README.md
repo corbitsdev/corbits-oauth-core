@@ -142,6 +142,8 @@ mountOAuthLogin(api, {
 
 Nothing here names a provider — config and callback HTML are caller-supplied; persistence is a host callback. `startOAuthLogin` stages the exchanged profile behind `commit()`. Callback binds are loopback only (`127.0.0.0/8` or `::1`); the redirect carrying the code is cleartext HTTP. The token session coalesces concurrent refreshes for the same profile. The hub subpath runs that loop in-process and writes a stock `oauth_token` credential; `createOAuthTokenRefresher` walks those credentials ahead of expiry.
 
+`PRODUCT.md`, `ARCHITECTURE.md`, and `IMPLEMENTATION.md` describe the PKCE loopback product, structure, and wire format.
+
 ## Development
 
 ```sh
