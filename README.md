@@ -17,7 +17,79 @@ bun add @corbits/oauth-core
 
 One flow shape: public client, PKCE S256, fixed-port loopback, no client secret.
 
-Typical callers: `@corbits/xai-provider`, `@corbits/codex-provider`.
+A provider is a package the host supplies — `@corbits/xai-provider`,
+`@corbits/codex-provider`, or one of its own — pairing an `OAuthClientConfig`
+with an `exchange`/`refresh` implementation. This library never names one
+itself.
+
+### Hub-hosted browser login
+
+The production path: a tenant router gets browser-driven "Continue with
+&lt;provider&gt;" login, and a background ticker keeps issued tokens fresh.
+Tokens never leave this process as plaintext — `mountOAuthLogin` writes them
+through the host's `CredentialCipher` into a stock `oauth_token` credential,
+and `createOAuthTokenRefresher` reads them back the same way.
+
+```ts
+import {
+  createOAuthTokenRefresher,
+  mountOAuthLogin,
+  type OAuthLoginProviders,
+} from "@corbits/oauth-core/hub";
+import type { DB } from "@intx/db";
+import type { TenantEnv } from "@intx/hub-api";
+import type { CredentialCipher } from "@intx/types";
+import { Hono, type MiddlewareHandler } from "hono";
+
+declare const db: DB["db"];
+declare const cipher: CredentialCipher;
+// The host's own grant middleware, e.g. from `createRequireGrant` — checked
+// once, the host's way, before a login can start.
+declare const requireGrant: MiddlewareHandler<TenantEnv>;
+// Provider packages the host has installed, e.g. `@corbits/xai-provider`.
+declare const providers: OAuthLoginProviders;
+// The host's tenant-scoped router, mounted under its own tenant prefix.
+declare const app: Hono<TenantEnv>;
+
+const oauthLoginApi = new Hono<TenantEnv>();
+
+mountOAuthLogin(oauthLoginApi, {
+  db,
+  cipher,
+  requireGrant,
+  providers,
+  onError: (error, { provider }) => {
+    console.error(`oauth login failed for ${provider}`, error);
+  },
+});
+
+app.route("/api/tenants/:tenantId", oauthLoginApi);
+
+const refresher = createOAuthTokenRefresher({
+  db,
+  cipher,
+  providers,
+  intervalMs: 60_000,
+  onRefreshed: ({ tenantId, credentialId }) => {
+    // Push the renewed credential to whatever holds a live copy.
+  },
+  onError: (error, { provider, credentialId }) => {
+    console.error(`oauth refresh failed`, { provider, credentialId, error });
+  },
+});
+refresher.start();
+```
+
+`mountOAuthLogin` adds `POST /oauth-logins` (starts a login and returns an
+authorize URL and a login id — the PKCE verifier and the loopback callback
+listener never leave this process), `GET /oauth-logins/:loginId` (poll for
+completion), and `DELETE /oauth-logins/:loginId` (cancel). The browser only
+ever learns the id of the credential the tokens landed in.
+
+### Lower-level: a CLI/desktop login
+
+Outside a hub — a bare CLI or desktop host with its own credential store —
+compose the same building blocks `mountOAuthLogin` composes, directly:
 
 ```ts
 import {
@@ -41,24 +113,17 @@ const config: OAuthClientConfig = {
   tokenTimeoutMs: 10_000,
 };
 
-// Host-owned persistence: an Interchange `oauth_token` credential, OS vault,
-// or otherwise. The Map stands in for whichever the host uses.
-const store = new Map<string, BaseTokens>();
-
-async function persist(profile: {
+// Host-owned persistence — an OS keychain, an encrypted file, whatever this
+// particular host already uses to hold secrets at rest.
+declare function persist(profile: {
   name: string;
   tokens: BaseTokens;
   createdAt: number;
-}): Promise<void> {
-  store.set(profile.name, profile.tokens);
-}
-async function load(name: string): Promise<{ tokens: BaseTokens } | undefined> {
-  const tokens = store.get(name);
-  return tokens === undefined ? undefined : { tokens };
-}
-async function update(name: string, tokens: BaseTokens): Promise<void> {
-  store.set(name, tokens);
-}
+}): Promise<void>;
+declare function load(
+  name: string,
+): Promise<{ tokens: BaseTokens } | undefined>;
+declare function update(name: string, tokens: BaseTokens): Promise<void>;
 
 const handle = await startOAuthLogin(
   { profile: "default", signal: new AbortController().signal },
@@ -103,11 +168,22 @@ const session = createTokenSession<BaseTokens, string>({
 const accessToken = await session.getValidToken("default");
 ```
 
-Hand `accessToken` to `InferenceSource.apiKey` — that injection is the host's job. A hub that wants a browser-driven login mounts `mountOAuthLogin` from `@corbits/oauth-core/hub` with its drizzle db, `CredentialCipher`, grant middleware, and provider entries instead of driving `startOAuthLogin` in-process.
+Hand `accessToken` to `InferenceSource.apiKey` — that injection is the
+host's job.
 
 ## How it works
 
-Nothing here names a provider — config and callback HTML are caller-supplied; persistence is a host callback. `startOAuthLogin` stages the exchanged profile behind `commit()`. Callback binds are loopback only (`127.0.0.0/8` or `::1`); the redirect carrying the code is cleartext HTTP. The token session coalesces concurrent refreshes for the same profile. The hub subpath runs that loop in-process and writes a stock `oauth_token` credential; `createOAuthTokenRefresher` walks those credentials ahead of expiry.
+Nothing here names a provider — config and callback HTML are caller-supplied;
+persistence is a host callback (`mountOAuthLogin`'s `db`/`cipher`, or a CLI
+host's own `persist`/`load`/`update`). `startOAuthLogin` stages the exchanged
+profile behind `commit()`. Callback binds are loopback only (`127.0.0.0/8` or
+`::1`); the redirect carrying the code is cleartext HTTP. The token session
+coalesces concurrent refreshes for the same profile. The hub subpath runs
+that same login loop in-process behind `mountOAuthLogin` and writes a stock
+`oauth_token` credential, encrypted under the host's `CredentialCipher`;
+`createOAuthTokenRefresher` walks those credentials ahead of expiry and
+refreshes them under a row lock (`FOR UPDATE SKIP LOCKED`), so two hubs
+ticking at once never both refresh the same credential.
 
 `PRODUCT.md`, `ARCHITECTURE.md`, and `IMPLEMENTATION.md` describe the PKCE loopback product, structure, and wire format.
 
