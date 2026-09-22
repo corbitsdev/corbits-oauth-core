@@ -166,8 +166,10 @@ describe("MCP OAuth discovery", () => {
     // Load-bearing: MCP spec "Security Considerations" — absence means the
     // server does not support PKCE and the client MUST refuse to proceed
     // rather than silently skip the challenge.
-    const { code_challenge_methods_supported: _unused, ...metadataWithoutPkce } =
-      asMetadata;
+    const {
+      code_challenge_methods_supported: _unused,
+      ...metadataWithoutPkce
+    } = asMetadata;
     const { fetchImpl } = fakeFetch({
       "https://mcp.example.com/.well-known/oauth-authorization-server/mcp": {
         status: 200,
@@ -233,9 +235,9 @@ describe("MCP OAuth discovery", () => {
     expect(entry.authorizationServer.scopesSupported).toEqual(
       linearAsMetadata.scopes_supported,
     );
-    expect(
-      entry.authorizationServer.tokenEndpointAuthMethodsSupported,
-    ).toEqual(linearAsMetadata.token_endpoint_auth_methods_supported);
+    expect(entry.authorizationServer.tokenEndpointAuthMethodsSupported).toEqual(
+      linearAsMetadata.token_endpoint_auth_methods_supported,
+    );
     expect(entry.authorizationServer.codeChallengeMethodsSupported).toEqual([
       "S256",
     ]);
@@ -312,13 +314,14 @@ describe("MCP OAuth discovery", () => {
     // outright registration rejection on strict servers; under-requesting it
     // when unadvertised loses refresh entirely for servers like Linear/Granola
     // that do support it.
-    const { fetchImpl: withRefresh, requests: withRefreshRequests } =
-      fakeFetch({
+    const { fetchImpl: withRefresh, requests: withRefreshRequests } = fakeFetch(
+      {
         "https://mcp.linear.app/register": {
           status: 200,
           body: { client_id: "linear-client" },
         },
-      });
+      },
+    );
     await registerMcpClient({
       registrationEndpoint: "https://mcp.linear.app/register",
       redirectUris: ["http://127.0.0.1:18080/callback"],
@@ -392,7 +395,10 @@ describe("MCP OAuth discovery", () => {
       scope: "read write",
       fetchImpl: silent,
     });
-    expect(silentResult.grantTypes).toEqual(["authorization_code", "refresh_token"]);
+    expect(silentResult.grantTypes).toEqual([
+      "authorization_code",
+      "refresh_token",
+    ]);
     expect(silentResult.scope).toBe("read write");
   });
 
@@ -430,9 +436,9 @@ describe("selectMcpScopes", () => {
       },
       resourceScopesSupported: linearProtectedResource.scopes_supported,
     };
-    expect(
-      selectMcpScopes({ entry, challengeScope: "read" }),
-    ).toEqual(["read"]);
+    expect(selectMcpScopes({ entry, challengeScope: "read" })).toEqual([
+      "read",
+    ]);
   });
 
   test("falls back to the resource's scopes_supported when there is no challenge", () => {

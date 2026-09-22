@@ -46,10 +46,13 @@ export {
   discoverMcpLoginEntry,
   registerMcpClient,
   mcpClientConfig,
+  selectMcpScopes,
   OAuthDiscoveryError,
   type DiscoverMcpLoginEntryOptions,
   type McpAuthorizationServer,
   type McpClientConfigOptions,
+  type McpClientRegistration,
   type McpLoginEntry,
   type RegisterMcpClientOptions,
+  type SelectMcpScopesOptions,
 } from "./discovery";
