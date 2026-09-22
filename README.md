@@ -219,7 +219,11 @@ export async function mcpOAuthConfig(
 ```
 
 Store `clientId` with the credential: refresh needs the same client that
-signed in. The config carries the RFC 8707 `resource` parameter, so the token
+signed in. `registerMcpClient` also returns the `grantTypes` and `scope` the
+server actually granted, which can be narrower than what was asked for.
+Discovery refuses a server without PKCE S256 or public-client support, and
+`mcpClientConfig` picks scopes the way the MCP spec orders them, adding
+`offline_access` when the server offers it (pass `scopes` to override). The config carries the RFC 8707 `resource` parameter, so the token
 is bound to that one MCP server.
 
 ## How it works
