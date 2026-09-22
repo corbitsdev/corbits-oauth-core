@@ -505,6 +505,51 @@ describe("selectMcpScopes", () => {
       "write",
     ]);
   });
+
+  test("wants a refresh token by default, adding offline_access when the AS advertises it (Granola shape)", () => {
+    // Load-bearing: refresh is the point of this ticket — a caller that
+    // doesn't pass wantRefresh should still get offline_access when the AS
+    // supports it, not silently lose refresh unless they remember the flag.
+    const entry: McpLoginEntry = {
+      resourceUrl: granolaProtectedResource.resource,
+      authorizationServer: {
+        issuer: granolaAsMetadata.issuer,
+        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
+        tokenEndpoint: granolaAsMetadata.token_endpoint,
+        scopesSupported: granolaAsMetadata.scopes_supported,
+      },
+      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+    };
+    expect(selectMcpScopes({ entry })).toEqual(["mcp", "offline_access"]);
+  });
+
+  test("wanting a refresh token by default adds nothing extra when the AS doesn't advertise offline_access (Linear shape)", () => {
+    const entry: McpLoginEntry = {
+      resourceUrl: linearProtectedResource.resource,
+      authorizationServer: {
+        issuer: linearAsMetadata.issuer,
+        authorizationEndpoint: linearAsMetadata.authorization_endpoint,
+        tokenEndpoint: linearAsMetadata.token_endpoint,
+        scopesSupported: linearAsMetadata.scopes_supported,
+      },
+      resourceScopesSupported: linearProtectedResource.scopes_supported,
+    };
+    expect(selectMcpScopes({ entry })).toEqual(["read", "write"]);
+  });
+
+  test("wantRefresh: false opts out of offline_access", () => {
+    const entry: McpLoginEntry = {
+      resourceUrl: granolaProtectedResource.resource,
+      authorizationServer: {
+        issuer: granolaAsMetadata.issuer,
+        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
+        tokenEndpoint: granolaAsMetadata.token_endpoint,
+        scopesSupported: granolaAsMetadata.scopes_supported,
+      },
+      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+    };
+    expect(selectMcpScopes({ entry, wantRefresh: false })).toEqual(["mcp"]);
+  });
 });
 
 describe("mcpClientConfig scope selection", () => {
@@ -523,6 +568,28 @@ describe("mcpClientConfig scope selection", () => {
       clientId: "client",
       redirectUri: "http://127.0.0.1:18080/callback",
       wantRefresh: true,
+    });
+    expect(config.scopes).toEqual(["mcp", "offline_access"]);
+  });
+
+  test("wants a refresh token by default (no wantRefresh option)", () => {
+    // Load-bearing: mcpClientConfig's default must agree with
+    // registerMcpClient's default request of refresh_token — a host that
+    // doesn't pass wantRefresh should still land offline_access when the AS
+    // supports it.
+    const entry: McpLoginEntry = {
+      resourceUrl: granolaProtectedResource.resource,
+      authorizationServer: {
+        issuer: granolaAsMetadata.issuer,
+        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
+        tokenEndpoint: granolaAsMetadata.token_endpoint,
+        scopesSupported: granolaAsMetadata.scopes_supported,
+      },
+      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+    };
+    const config = mcpClientConfig(entry, {
+      clientId: "client",
+      redirectUri: "http://127.0.0.1:18080/callback",
     });
     expect(config.scopes).toEqual(["mcp", "offline_access"]);
   });
