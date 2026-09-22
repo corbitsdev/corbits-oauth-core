@@ -4,6 +4,8 @@ import {
   OAuthCallbackAddressUnavailableError,
   OAuthCallbackPortInUseError,
   startCallbackServer,
+  type CallbackFailure,
+  type CallbackServer,
 } from "./index.js";
 
 const config = (port: number, host?: string) => ({
@@ -11,7 +13,8 @@ const config = (port: number, host?: string) => ({
   ...(host === undefined ? {} : { host }),
   path: "/callback",
   doneHtml: "<html>done</html>",
-  failedHtml: (reason: string) => `<html>failed: ${reason}</html>`,
+  failedHtml: (failure: CallbackFailure) =>
+    `<html>failed: ${failure.code}${failure.providerError === undefined ? "" : `:${failure.providerError}`}</html>`,
 });
 
 describe("Callback server startCallbackServer — state validation", () => {

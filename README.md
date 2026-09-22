@@ -166,6 +166,39 @@ mountOAuthLogin(oauthLoginApi, {
 
 `callbackUrl` is the absolute public URL of that route; it is registered verbatim as the redirect_uri.
 
+A refused redirect is reported as a code — `state_mismatch`, `provider_error`
+(carrying the authorization server's own `error`), `no_code` — not as prose.
+What to tell the person differs by product and brand; what the redirect was
+does not.
+
+#### Retrying a sign-in
+
+The authorization server accepts one registered redirect_uri per client, so
+every attempt for a provider contends for the same loopback port, and the
+authorize page already open in the browser is bound to the state and PKCE
+verifier of the attempt that opened it. A second attempt should therefore
+resume the first, not replace it. `createLoginRegistry` holds one live login
+per key and does that:
+
+```ts
+import { createLoginRegistry } from "@corbits/oauth-core";
+
+const logins = createLoginRegistry();
+
+const { handle, resumed } = await logins.startOrResume(
+  "codex",
+  () => startOAuthLogin({ profile: "default", signal }, deps),
+  // Only the principal who started a login resumes it.
+  { tag: `${tenantId}:${principalId}` },
+);
+```
+
+An entry is released when its login settles, so the next attempt after a
+completed, failed or cancelled one starts clean. `logins.cancel(key)` ends
+the login in flight and frees the port. `mountOAuthLogin` uses this already:
+a start that collides with a pending login answers `200` with that login's
+id rather than `409`.
+
 ## Upgrading from 0.1
 
 - `OAuthLoginProvider` and `callbackTargetFor` import from `@corbits/oauth-core`, not `@corbits/oauth-core/hub`.

@@ -7,6 +7,7 @@ import { Hono, type MiddlewareHandler } from "hono";
 import {
   baseTokensFromResponse,
   buildAuthorizeUrl,
+  createLoginRegistry,
   discoverMcpLoginEntry,
   exchangeCode,
   mcpClientConfig,
@@ -163,6 +164,12 @@ export function mountOAuthLogin(
   opts: MountOAuthLoginOpts,
 ): void {
   const { logins, callbacks } = opts.store ?? createOAuthLoginStore();
+  // One live login per provider: its callback server binds the one port the
+  // authorization server will redirect to, so a second attempt has nowhere
+  // to listen. Resuming is also what keeps the authorize page already open
+  // in the operator's browser valid (CL-8857).
+  const inFlight = createLoginRegistry();
+  const loginIdOf = new Map<string, string>();
   const ttlMs = opts.loginTtlMs ?? DEFAULT_LOGIN_TTL_MS;
   if (opts.callbackUrl !== undefined) assertSecureCallbackUrl(opts.callbackUrl);
 
@@ -293,20 +300,27 @@ export function mountOAuthLogin(
     const { flow } = resolved;
     const abort = new AbortController();
 
-    let handle;
+    let started;
     try {
-      handle = await startOAuthLogin(
-        { profile: body.credentialName, signal: abort.signal },
-        {
-          startCallbackServer: flow.startCallbackServer,
-          buildAuthorizeUrl: (pkce, state) =>
-            buildAuthorizeUrl(flow.config, pkce, state),
-          exchangeCode: flow.exchange,
-          // Persistence runs below once the login id exists to report against.
-          saveProfile: () => Promise.resolve(),
-          // The browser opens the authorize URL; the hub never owns a display.
-          openInBrowser: () => undefined,
-        },
+      started = await inFlight.startOrResume(
+        flow.provider,
+        () =>
+          startOAuthLogin(
+            { profile: body.credentialName, signal: abort.signal },
+            {
+              startCallbackServer: flow.startCallbackServer,
+              buildAuthorizeUrl: (pkce, state) =>
+                buildAuthorizeUrl(flow.config, pkce, state),
+              exchangeCode: flow.exchange,
+              // Persistence runs below once the login id exists to report against.
+              saveProfile: () => Promise.resolve(),
+              // The browser opens the authorize URL; the hub never owns a display.
+              openInBrowser: () => undefined,
+            },
+          ),
+        // A login belongs to the principal who started it: resuming is for
+        // them, not for whoever asks next.
+        { tag: `${tenantId}:${principalId}` },
       );
     } catch (cause) {
       opts.onError?.(cause, { provider: flow.provider });
@@ -315,14 +329,31 @@ export function mountOAuthLogin(
         409,
       );
     }
+    const handle = started.handle;
+    if (started.resumed) {
+      const loginId = loginIdOf.get(flow.provider);
+      // Recorded below in the same tick a login is registered, so a live
+      // entry always has one; saying so beats inventing a second login.
+      if (loginId === undefined) {
+        return c.json(
+          { error: "a login is in flight but cannot be resumed" },
+          409,
+        );
+      }
+      return c.json({ loginId, authorizeUrl: handle.authorizeUrl }, 200);
+    }
 
     const loginId = logins.create({
       tenantId,
       principalId,
       expiresAt: Date.now() + ttlMs,
       abort,
-      cancel: handle.cancel,
+      cancel: () => {
+        inFlight.cancel(flow.provider);
+        loginIdOf.delete(flow.provider);
+      },
     });
+    loginIdOf.set(flow.provider, loginId);
 
     // Detached on purpose: the redirect lands minutes after this response.
     void handle.completed.then(
@@ -341,6 +372,7 @@ export function mountOAuthLogin(
             metadata: flow.metadata(staged.profile.tokens),
           });
           logins.settle(loginId, { status: "completed", credentialId });
+          loginIdOf.delete(flow.provider);
         } catch (cause) {
           opts.onError?.(cause, { provider: flow.provider });
           logins.settle(loginId, {
@@ -350,6 +382,7 @@ export function mountOAuthLogin(
                 ? cause.message
                 : "the tokens could not be stored",
           });
+          loginIdOf.delete(flow.provider);
         }
       },
       (cause: unknown) => {
@@ -358,6 +391,7 @@ export function mountOAuthLogin(
           status: "failed",
           message: cause instanceof Error ? cause.message : String(cause),
         });
+        loginIdOf.delete(flow.provider);
       },
     );
 
