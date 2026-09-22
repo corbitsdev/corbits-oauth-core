@@ -1,6 +1,6 @@
 # @corbits/oauth-core
 
-PKCE + loopback OAuth for an Interchange host: mint an access token the host injects as `InferenceSource.apiKey`. A loopback callback server, token exchange/refresh, and an expiring-token session that refreshes ahead of expiry and coalesces concurrent refreshes. Endpoints and client id come from the caller, and persistence stays with the host.
+PKCE + loopback OAuth for an Interchange host: mint an OAuth token the host stores as a credential, which an `InferenceSource` names by `credentialId` (the harness reads the current secret at send time). A loopback callback server, token exchange/refresh, and an expiring-token session that refreshes ahead of expiry and coalesces concurrent refreshes. Endpoints and client id come from the caller, and persistence stays with the host.
 
 ## Runtime support
 
