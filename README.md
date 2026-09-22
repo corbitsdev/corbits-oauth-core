@@ -186,6 +186,46 @@ export async function loginAndGetToken(
 Hand the returned token to `InferenceSource.apiKey` — that injection is the
 host's job.
 
+### Lower-level: an MCP server with no fixed client
+
+An MCP server such as Linear's publishes its authorization server instead of
+a fixed client id. Discover it, register a public client, and build the same
+`OAuthClientConfig` the flows above take:
+
+```ts
+import {
+  discoverMcpLoginEntry,
+  mcpClientConfig,
+  registerMcpClient,
+  type OAuthClientConfig,
+} from "@corbits/oauth-core";
+
+export async function mcpOAuthConfig(
+  resourceUrl: string,
+  redirectUri: string,
+  clientName: string,
+): Promise<{ config: OAuthClientConfig; clientId: string }> {
+  const entry = await discoverMcpLoginEntry({ resourceUrl });
+  const { registrationEndpoint } = entry.authorizationServer;
+  if (registrationEndpoint === undefined) {
+    throw new Error(`${resourceUrl} offers no dynamic client registration`);
+  }
+  const { clientId } = await registerMcpClient({
+    registrationEndpoint,
+    redirectUris: [redirectUri],
+    clientName,
+  });
+  return {
+    config: mcpClientConfig(entry, { clientId, redirectUri }),
+    clientId,
+  };
+}
+```
+
+Store `clientId` with the credential: refresh needs the same client that
+signed in. The config carries the RFC 8707 `resource` parameter, so the token
+is bound to that one MCP server.
+
 ## How it works
 
 Nothing here names a provider — config and callback HTML are caller-supplied;
