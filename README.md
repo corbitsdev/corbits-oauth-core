@@ -103,88 +103,84 @@ is a required callback here rather than an optional log hook.
 
 ### Lower-level: a CLI/desktop login
 
-Outside a hub — a bare CLI or desktop host with its own credential store —
-compose the same building blocks `mountOAuthLogin` composes, directly:
+Outside a hub, a CLI or desktop app drives `startOAuthLogin` itself. Each
+dependency is where that host plugs in its own piece: its callback page, the
+provider package's code exchange, and its own credential store.
 
 ```ts
 import {
-  baseTokensFromResponse,
-  buildAuthorizeUrl,
   createTokenSession,
-  exchangeCode,
-  refreshTokenRequest,
+  buildAuthorizeUrl,
   startCallbackServer,
   startOAuthLogin,
   type BaseTokens,
-  type OAuthClientConfig,
+  type CallbackServer,
   type OAuthLoginDeps,
   type TokenSessionDeps,
 } from "@corbits/oauth-core";
+import type { OAuthLoginProvider } from "@corbits/oauth-core/hub";
 
-// Host-owned persistence — an OS keychain, an encrypted file, whatever this
-// particular host already uses to hold secrets at rest. The field types
-// come straight from the library's own dependency types, so a store that
-// satisfies this shape also satisfies `startOAuthLogin` and
-// `createTokenSession` directly.
-type ProfileStore = {
-  persist: OAuthLoginDeps<BaseTokens>["saveProfile"];
+// The host's own callback page, served on the provider's fixed redirect_uri.
+function startBrandedCallbackServer(
+  provider: OAuthLoginProvider,
+  expectedState: string,
+): Promise<CallbackServer> {
+  const redirect = new URL(provider.oauthConfig.redirectUri);
+  return startCallbackServer(expectedState, {
+    host: redirect.hostname,
+    port: Number(redirect.port),
+    path: redirect.pathname,
+    doneHtml: "<p>Signed in. You can close this tab.</p>",
+    failedHtml: (reason) => `<p>Sign-in failed: ${reason}</p>`,
+  });
+}
+
+// Where this host keeps secrets at rest: an OS keychain, an encrypted file.
+export type ProfileStore = {
+  save: OAuthLoginDeps<BaseTokens>["saveProfile"];
   load: TokenSessionDeps<BaseTokens, string>["loadProfile"];
   update: TokenSessionDeps<BaseTokens, string>["updateTokens"];
 };
 
-export async function loginAndGetToken(
-  config: OAuthClientConfig,
+// `provider` comes from a provider package, e.g. `@corbits/xai-provider`,
+// which supplies the OAuth config, code exchange and refresh.
+export async function signIn(
+  provider: OAuthLoginProvider,
   store: ProfileStore,
+  signal: AbortSignal,
 ): Promise<string> {
-  // The callback server binds exactly what `redirectUri` names.
-  const redirect = new URL(config.redirectUri);
-  const handle = await startOAuthLogin(
-    { profile: "default", signal: new AbortController().signal },
+  const login = await startOAuthLogin(
+    { profile: "default", signal },
     {
       startCallbackServer: (state) =>
-        startCallbackServer(state, {
-          port: Number(redirect.port),
-          host: redirect.hostname,
-          path: redirect.pathname,
-          doneHtml:
-            "<html><body>Signed in — you can close this tab.</body></html>",
-          failedHtml: (reason) =>
-            `<html><body>Sign-in failed: ${reason}</body></html>`,
-        }),
+        startBrandedCallbackServer(provider, state),
       buildAuthorizeUrl: (pkce, state) =>
-        buildAuthorizeUrl(config, pkce, state),
-      exchangeCode: async (code, verifier, now) =>
-        baseTokensFromResponse(
-          await exchangeCode(config, code, verifier),
-          now,
-          undefined,
-        ),
-      saveProfile: store.persist,
+        buildAuthorizeUrl(provider.oauthConfig, pkce, state),
+      exchangeCode: provider.exchange,
+      saveProfile: store.save,
     },
   );
-
-  const staged = await handle.completed;
+  const staged = await login.completed;
   await staged.commit();
 
+  const refresh = provider.refresh;
+  if (refresh === undefined) {
+    return staged.profile.tokens.access;
+  }
   const session = createTokenSession<BaseTokens, string>({
     skewMs: 30_000,
     loadProfile: store.load,
     updateTokens: store.update,
-    refreshTokens: async (refreshToken, now) =>
-      baseTokensFromResponse(
-        await refreshTokenRequest(config, refreshToken),
-        now,
-        refreshToken,
-      ),
+    refreshTokens: (refreshToken, now) => refresh(refreshToken, now),
     toAccess: (tokens) => tokens.access,
   });
-
   return session.getValidToken("default");
 }
 ```
 
-Hand the returned token to `InferenceSource.apiKey` — that injection is the
-host's job.
+`startOAuthLogin` opens the browser, waits for the callback, exchanges the
+code, and stages the profile; `commit()` saves it. The token session then
+refreshes ahead of expiry and coalesces concurrent refreshes.
 
 ### Lower-level: an MCP server with no fixed client
 
