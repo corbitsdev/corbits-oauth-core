@@ -1,6 +1,6 @@
 # @corbits/oauth-core
 
-PKCE + loopback OAuth for an Interchange host: mint an access token the harness injects as `InferenceSource.apiKey`. A loopback callback server, token exchange/refresh, and an expiring-token session that refreshes ahead of expiry and coalesces concurrent refreshes. It is not a vault and not a client for any particular issuer — endpoints and client id come from the caller.
+PKCE + loopback OAuth for an Interchange host: mint an access token the host injects as `InferenceSource.apiKey`. A loopback callback server, token exchange/refresh, and an expiring-token session that refreshes ahead of expiry and coalesces concurrent refreshes. Endpoints and client id come from the caller, and persistence stays with the host.
 
 ## Runtime support
 
@@ -141,6 +141,8 @@ mountOAuthLogin(api, {
 ## How it works
 
 Nothing here names a provider — config and callback HTML are caller-supplied; persistence is a host callback. `startOAuthLogin` stages the exchanged profile behind `commit()`. Callback binds are loopback only (`127.0.0.0/8` or `::1`); the redirect carrying the code is cleartext HTTP. The token session coalesces concurrent refreshes for the same profile. The hub subpath runs that loop in-process and writes a stock `oauth_token` credential; `createOAuthTokenRefresher` walks those credentials ahead of expiry.
+
+`PRODUCT.md`, `ARCHITECTURE.md`, and `IMPLEMENTATION.md` describe the PKCE loopback product, structure, and wire format.
 
 ## Development
 
