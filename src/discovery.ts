@@ -116,7 +116,9 @@ export type McpClientConfigOptions = {
   challengeScope?: string;
   // Add `offline_access` (when the authorization server supports it) so the
   // token response includes a refresh token. Only consulted when `scopes` is
-  // omitted.
+  // omitted. Defaults to true — registerMcpClient already requests
+  // refresh_token by default, so scope selection wants offline_access by
+  // default too; pass false to opt out.
   wantRefresh?: boolean;
   extraAuthorizeParams?: Record<string, string>;
   tokenTimeoutMs?: number;
@@ -125,6 +127,8 @@ export type McpClientConfigOptions = {
 export type SelectMcpScopesOptions = {
   entry: McpLoginEntry;
   challengeScope?: string;
+  // Defaults to true, matching registerMcpClient's default refresh_token
+  // request; pass false to opt out of adding offline_access.
   wantRefresh?: boolean;
 };
 
@@ -418,8 +422,10 @@ export async function registerMcpClient(
 // the `scope` parameter from a 401 WWW-Authenticate challenge, (2) all scopes
 // in the protected resource's `scopes_supported`, (3) omit the scope
 // parameter entirely. `offline_access` is layered on separately per the
-// spec's "Refresh Tokens" section: only when the caller wants a refresh token
-// and the authorization server's own `scopes_supported` lists it.
+// spec's "Refresh Tokens" section: `wantRefresh` defaults to true (this
+// package always registers for refresh_token, see grantTypesToRequest), so
+// offline_access is added whenever the authorization server's own
+// `scopes_supported` lists it; pass `wantRefresh: false` to opt out.
 export function selectMcpScopes(opts: SelectMcpScopesOptions): string[] {
   const priorityScopes = selectPriorityScopes(opts);
   return addOfflineAccessScope(priorityScopes, opts);
@@ -437,7 +443,7 @@ function addOfflineAccessScope(
   scopes: string[],
   opts: SelectMcpScopesOptions,
 ): string[] {
-  if (opts.wantRefresh !== true) return scopes;
+  if (opts.wantRefresh === false) return scopes;
   const authServerScopes = opts.entry.authorizationServer.scopesSupported;
   if (authServerScopes === undefined) return scopes;
   if (!authServerScopes.includes("offline_access")) return scopes;
@@ -450,7 +456,8 @@ function addOfflineAccessScope(
  * client id. The RFC 8707 `resource` indicator binds the token to the MCP
  * server; callers pass further provider-required params through
  * `extraAuthorizeParams`. Scopes come from `selectMcpScopes` unless the
- * caller passes an explicit `scopes` override.
+ * caller passes an explicit `scopes` override; `wantRefresh` defaults to
+ * true, matching this package's default refresh_token registration request.
  */
 export function mcpClientConfig(
   entry: McpLoginEntry,
@@ -463,7 +470,7 @@ export function mcpClientConfig(
       ...(opts.challengeScope !== undefined
         ? { challengeScope: opts.challengeScope }
         : {}),
-      wantRefresh: opts.wantRefresh ?? false,
+      wantRefresh: opts.wantRefresh ?? true,
     });
   return {
     clientId: opts.clientId,
