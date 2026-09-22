@@ -68,6 +68,13 @@ export function mountOAuthLogin(
   // in the operator's browser valid (CL-8857).
   const inFlight = createLoginRegistry();
   const loginIdOf = new Map<string, string>();
+  // Cleanup names the login it belongs to, never just its provider. A login
+  // leaves the registry the moment it settles, but its credential is still
+  // being stored; a newer login for the same provider -- possibly another
+  // principal's -- can already be live by then, and must not lose its id.
+  const releaseLoginId = (provider: string, loginId: string): void => {
+    if (loginIdOf.get(provider) === loginId) loginIdOf.delete(provider);
+  };
   const ttlMs = opts.loginTtlMs ?? DEFAULT_LOGIN_TTL_MS;
 
   const owner = (c: {
@@ -152,9 +159,12 @@ export function mountOAuthLogin(
       principalId,
       expiresAt: Date.now() + ttlMs,
       abort,
+      // This login's own handle, not whatever is live under the provider:
+      // the TTL sweep can reach an expired entry after a newer login has
+      // taken the port, and cancelling by provider would end that one.
       cancel: () => {
-        inFlight.cancel(body.provider);
-        loginIdOf.delete(body.provider);
+        handle.cancel();
+        releaseLoginId(body.provider, loginId);
       },
     });
     loginIdOf.set(body.provider, loginId);
@@ -176,14 +186,14 @@ export function mountOAuthLogin(
             metadata: provider.metadata?.(staged.profile.tokens) ?? {},
           });
           logins.settle(loginId, { status: "completed", credentialId });
-          loginIdOf.delete(body.provider);
+          releaseLoginId(body.provider, loginId);
         } catch (cause) {
           opts.onError?.(cause, { provider: body.provider });
           logins.settle(loginId, {
             status: "failed",
             message: "the tokens could not be stored",
           });
-          loginIdOf.delete(body.provider);
+          releaseLoginId(body.provider, loginId);
         }
       },
       (cause: unknown) => {
@@ -192,7 +202,7 @@ export function mountOAuthLogin(
           status: "failed",
           message: cause instanceof Error ? cause.message : String(cause),
         });
-        loginIdOf.delete(body.provider);
+        releaseLoginId(body.provider, loginId);
       },
     );
 
