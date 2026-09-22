@@ -1,189 +1,262 @@
 # @corbits/oauth-core
 
-PKCE + loopback OAuth for an Interchange host: mint an access token the
-harness injects as `InferenceSource.apiKey`. A loopback callback server,
-token exchange/refresh, and an expiring-token session that refreshes ahead
-of expiry and coalesces concurrent refreshes. It is not a credential vault
-and it is not a client for any particular issuer — endpoints and client id
-come from the caller (typically `@corbits/xai-provider` or
-`@corbits/codex-provider`). One flow shape: public client, PKCE S256,
-fixed-port loopback, no client secret.
+PKCE + loopback OAuth for an Interchange host: mint an access token the host injects as `InferenceSource.apiKey`. A loopback callback server, token exchange/refresh, and an expiring-token session that refreshes ahead of expiry and coalesces concurrent refreshes. Endpoints and client id come from the caller, and persistence stays with the host.
 
-## Install
+## Runtime support
+
+Bun >= 1.2 runs the published TypeScript source. Node >= 24 is an engines floor for tooling; native Node does not load this extensionless TypeScript source as-is.
+
+## Quickstart
 
 ```sh
+npm add @corbits/oauth-core
+pnpm add @corbits/oauth-core
+yarn add @corbits/oauth-core
 bun add @corbits/oauth-core
-# or
-npm install @corbits/oauth-core
 ```
 
-The package ships TypeScript source and needs no build step. Bun >= 1.2
-consumes the TypeScript source directly. Node.js >= 24 is the engines
-floor for published-dist consumers — native Node does not load this
-extensionless TypeScript source as-is.
+One flow shape: public client, PKCE S256, fixed-port loopback, no client secret.
 
-## Usage
+A provider is a package the host supplies — `@corbits/xai-provider`,
+`@corbits/codex-provider`, or one of its own — pairing an `OAuthClientConfig`
+with an `exchange`/`refresh` implementation. This library never names one
+itself.
+
+### Hub-hosted browser login
+
+The production path: a tenant router gets browser-driven "Continue with
+&lt;provider&gt;" login, and a background ticker keeps issued tokens fresh.
+Tokens never leave this process as plaintext — `mountOAuthLogin` writes them
+through the host's `CredentialCipher` into a stock `oauth_token` credential,
+and `createOAuthTokenRefresher` reads them back the same way.
 
 ```ts
 import {
-  baseTokensFromResponse,
-  buildAuthorizeUrl,
+  createOAuthTokenRefresher,
+  mountOAuthLogin,
+  type OAuthLoginProviders,
+  type OAuthTokenRefresher,
+} from "@corbits/oauth-core/hub";
+import type { DB } from "@intx/db";
+import type { TenantEnv } from "@intx/hub-api";
+import type { CredentialCipher } from "@intx/types";
+import { Hono, type MiddlewareHandler } from "hono";
+
+export function installOAuthLogin(
+  app: Hono<TenantEnv>,
+  opts: {
+    db: DB["db"];
+    cipher: CredentialCipher;
+    // The host's own grant middleware, e.g. from `createRequireGrant` —
+    // checked once, the host's way, before a login can start.
+    requireGrant: MiddlewareHandler<TenantEnv>;
+    // Provider packages the host has installed, e.g. `@corbits/xai-provider`.
+    providers: OAuthLoginProviders;
+    // Required: a refresh only reaches the DB. A sidecar already running
+    // with the old token keeps using it until something tells it to reload,
+    // so the host must push or notify its running consumers here — see
+    // "Keeping running consumers in sync" below.
+    onRefreshed: (context: { tenantId: string; credentialId: string }) => void;
+    onError: (error: unknown) => void;
+  },
+): OAuthTokenRefresher {
+  const oauthLoginApi = new Hono<TenantEnv>();
+
+  mountOAuthLogin(oauthLoginApi, {
+    db: opts.db,
+    cipher: opts.cipher,
+    requireGrant: opts.requireGrant,
+    providers: opts.providers,
+    onError: (error) => opts.onError(error),
+  });
+  app.route("/api/tenants/:tenantId", oauthLoginApi);
+
+  const refresher = createOAuthTokenRefresher({
+    db: opts.db,
+    cipher: opts.cipher,
+    providers: opts.providers,
+    intervalMs: 60_000,
+    onRefreshed: (context) => opts.onRefreshed(context),
+    onError: (error) => opts.onError(error),
+  });
+  refresher.start();
+  return refresher; // host calls .stop() on shutdown
+}
+```
+
+`mountOAuthLogin` adds `POST /oauth-logins` (starts a login and returns an
+authorize URL and a login id — the PKCE verifier and the loopback callback
+listener never leave this process), `GET /oauth-logins/:loginId` (poll for
+completion), and `DELETE /oauth-logins/:loginId` (cancel). The browser only
+ever learns the id of the credential the tokens landed in.
+
+#### Keeping running consumers in sync
+
+`createOAuthTokenRefresher` only writes the renewed token to the credential
+row; it does not know what, if anything, is holding a live copy of the old
+one. A host that runs long-lived processes against a credential — sidecars,
+workers, anything that loaded the token into memory rather than re-reading it
+per call — has to push or notify those processes itself from `onRefreshed`,
+or they keep using the stale token until they happen to restart or redeploy,
+even though the database already has the fresh one. That is why `onRefreshed`
+is a required callback here rather than an optional log hook.
+
+### Lower-level: a CLI/desktop login
+
+Outside a hub, a CLI or desktop app drives `startOAuthLogin` itself. Each
+dependency is where that host plugs in its own piece: its callback page, the
+provider package's code exchange, and its own credential store.
+
+```ts
+import {
   createTokenSession,
-  exchangeCode,
-  refreshTokenRequest,
+  buildAuthorizeUrl,
   startCallbackServer,
   startOAuthLogin,
   type BaseTokens,
+  type CallbackServer,
+  type OAuthLoginDeps,
+  type TokenSessionDeps,
+} from "@corbits/oauth-core";
+import type { OAuthLoginProvider } from "@corbits/oauth-core/hub";
+
+// The host's own callback page, served on the provider's fixed redirect_uri.
+function startBrandedCallbackServer(
+  provider: OAuthLoginProvider,
+  expectedState: string,
+): Promise<CallbackServer> {
+  const redirect = new URL(provider.oauthConfig.redirectUri);
+  return startCallbackServer(expectedState, {
+    host: redirect.hostname,
+    port: Number(redirect.port),
+    path: redirect.pathname,
+    doneHtml: "<p>Signed in. You can close this tab.</p>",
+    failedHtml: (reason) => `<p>Sign-in failed: ${reason}</p>`,
+  });
+}
+
+// Where this host keeps secrets at rest: an OS keychain, an encrypted file.
+export type ProfileStore = {
+  save: OAuthLoginDeps<BaseTokens>["saveProfile"];
+  load: TokenSessionDeps<BaseTokens, string>["loadProfile"];
+  update: TokenSessionDeps<BaseTokens, string>["updateTokens"];
+};
+
+// `provider` comes from a provider package, e.g. `@corbits/xai-provider`,
+// which supplies the OAuth config, code exchange and refresh.
+export async function signIn(
+  provider: OAuthLoginProvider,
+  store: ProfileStore,
+  signal: AbortSignal,
+): Promise<string> {
+  const login = await startOAuthLogin(
+    { profile: "default", signal },
+    {
+      startCallbackServer: (state) =>
+        startBrandedCallbackServer(provider, state),
+      buildAuthorizeUrl: (pkce, state) =>
+        buildAuthorizeUrl(provider.oauthConfig, pkce, state),
+      exchangeCode: provider.exchange,
+      saveProfile: store.save,
+    },
+  );
+  const staged = await login.completed;
+  await staged.commit();
+
+  const refresh = provider.refresh;
+  if (refresh === undefined) {
+    return staged.profile.tokens.access;
+  }
+  const session = createTokenSession<BaseTokens, string>({
+    skewMs: 30_000,
+    loadProfile: store.load,
+    updateTokens: store.update,
+    refreshTokens: (refreshToken, now) => refresh(refreshToken, now),
+    toAccess: (tokens) => tokens.access,
+  });
+  return session.getValidToken("default");
+}
+```
+
+`startOAuthLogin` opens the browser, waits for the callback, exchanges the
+code, and stages the profile; `commit()` saves it. The token session then
+refreshes ahead of expiry and coalesces concurrent refreshes.
+
+### Lower-level: an MCP server with no fixed client
+
+An MCP server such as Linear's publishes its authorization server instead of
+a fixed client id. Discover it, register a public client, and build the same
+`OAuthClientConfig` the flows above take:
+
+```ts
+import {
+  discoverMcpLoginEntry,
+  mcpClientConfig,
+  registerMcpClient,
   type OAuthClientConfig,
 } from "@corbits/oauth-core";
 
-const config: OAuthClientConfig = {
-  clientId: "my-client-id",
-  authorizeUrl: "https://provider.example.com/oauth/authorize",
-  tokenUrl: "https://provider.example.com/oauth/token",
-  redirectUri: "http://127.0.0.1:8765/callback",
-  scopes: ["profile"],
-  tokenTimeoutMs: 10_000,
-};
-
-// `persist`, `load`, and `update` below are the host's storage layer — write
-// an Interchange `oauth_token` credential or use the OS vault. This package
-// never stores.
-const handle = await startOAuthLogin(
-  { profile: "default", signal: new AbortController().signal },
-  {
-    startCallbackServer: (state) =>
-      startCallbackServer(state, {
-        port: 8765,
-        // Optional; defaults to 127.0.0.1.
-        host: "127.0.0.1",
-        path: "/callback",
-        doneHtml:
-          "<html><body>Signed in — you can close this tab.</body></html>",
-        failedHtml: (reason) =>
-          `<html><body>Sign-in failed: ${reason}</body></html>`,
-      }),
-    buildAuthorizeUrl: (pkce, state) => buildAuthorizeUrl(config, pkce, state),
-    exchangeCode: async (code, verifier, now) =>
-      baseTokensFromResponse(
-        await exchangeCode(config, code, verifier),
-        now,
-        undefined,
-      ),
-    // Host: Interchange `oauth_token` or the OS vault. This package does not store.
-    saveProfile: persist,
-  },
-);
-
-const staged = await handle.completed;
-await staged.commit();
-
-const session = createTokenSession<BaseTokens, string>({
-  skewMs: 30_000,
-  loadProfile: load,
-  updateTokens: update,
-  refreshTokens: async (refreshToken, now) =>
-    baseTokensFromResponse(
-      await refreshTokenRequest(config, refreshToken),
-      now,
-      refreshToken,
-    ),
-  toAccess: (tokens) => tokens.access,
-});
-
-const accessToken = await session.getValidToken("default");
-// Host: put `accessToken` on InferenceSource.apiKey. The harness injects it at send.
+export async function mcpOAuthConfig(
+  resourceUrl: string,
+  redirectUri: string,
+  clientName: string,
+): Promise<{ config: OAuthClientConfig; clientId: string }> {
+  const entry = await discoverMcpLoginEntry({ resourceUrl });
+  const { registrationEndpoint } = entry.authorizationServer;
+  if (registrationEndpoint === undefined) {
+    throw new Error(`${resourceUrl} offers no dynamic client registration`);
+  }
+  const { clientId } = await registerMcpClient({
+    registrationEndpoint,
+    redirectUris: [redirectUri],
+    clientName,
+  });
+  return {
+    config: mcpClientConfig(entry, { clientId, redirectUri }),
+    clientId,
+  };
+}
 ```
 
-See `src/index.ts` for the full export surface.
+Store `clientId` with the credential: refresh needs the same client that
+signed in. `registerMcpClient` also returns the `grantTypes` and `scope` the
+server actually granted, which can be narrower than what was asked for.
+Discovery refuses a server without PKCE S256 or public-client support, and
+`mcpClientConfig` picks scopes the way the MCP spec orders them, adding
+`offline_access` when the server offers it (pass `scopes` to override). The config carries the RFC 8707 `resource` parameter, so the token
+is bound to that one MCP server.
 
-## Hub mount (`@corbits/oauth-core/hub`)
+## How it works
 
-A server-only subpath for an Interchange hub that wants a browser-driven
-login: the person clicks a button in a web client, the hub runs the whole
-loopback PKCE flow in its own process, and the browser only ever sees an
-authorize URL, a login id, and -- on success -- the id of the credential
-the tokens were stored under.
+Nothing here names a provider — config and callback HTML are caller-supplied;
+persistence is a host callback (`mountOAuthLogin`'s `db`/`cipher`, or a CLI
+host's own `persist`/`load`/`update`). `startOAuthLogin` stages the exchanged
+profile behind `commit()`. Callback binds are loopback only (`127.0.0.0/8` or
+`::1`); the redirect carrying the code is cleartext HTTP. The token session
+coalesces concurrent refreshes for the same profile. The hub subpath runs
+that same login loop in-process behind `mountOAuthLogin` and writes a stock
+`oauth_token` credential, encrypted under the host's `CredentialCipher`;
+`createOAuthTokenRefresher` walks those credentials ahead of expiry and
+refreshes them under a row lock (`FOR UPDATE SKIP LOCKED`), so two hubs
+ticking at once never both refresh the same credential.
 
-```ts
-import { mountOAuthLogin } from "@corbits/oauth-core/hub";
+`PRODUCT.md`, `ARCHITECTURE.md`, and `IMPLEMENTATION.md` describe the PKCE loopback product, structure, and wire format.
 
-const api = new Hono<TenantEnv>();
-mountOAuthLogin(api, {
-  db,
-  cipher: credentialCipher,
-  requireGrant: requireGrant("credential:*", "create"),
-  providers: {
-    // The host owns the provider packages; this library never imports one.
-    someProvider: {
-      oauthConfig,
-      exchange: (code, verifier, now) => exchangeSomeCode(code, verifier, now),
-    },
-  },
-});
-app.route("/api/tenants/:tenantId", api);
+## Development
+
+```sh
+git clone https://github.com/corbitsdev/corbits-oauth-core.git
+cd corbits-oauth-core
+bun install
+bun run typecheck
+bun run lint
+bun run format:check
+bun run test
+bun run check
 ```
 
-Routes, all under the tenant prefix the host mounts them on:
-
-| Route                           | What it does                                                            |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| `GET /oauth-logins/providers`   | The provider names this host registered.                                |
-| `POST /oauth-logins`            | Starts a login; returns `{ loginId, authorizeUrl }`.                    |
-| `GET /oauth-logins/:loginId`    | `pending` / `completed` (with `credentialId`) / `failed` / `cancelled`. |
-| `DELETE /oauth-logins/:loginId` | Cancels an abandoned login and frees its fixed callback port.           |
-
-The tokens are written as a stock `oauth_token` credential with the same
-row shape, AAD-bound encryption and creator grant the platform's own
-`POST /credentials` writes. The PKCE verifier never leaves the process and
-no raw `id_token` is ever stored -- a provider that needs an account id
-supplies a `metadata` projection instead. Logins expire (five minutes by
-default) so an abandoned one releases its fixed loopback port.
-
-`createOAuthTokenRefresher` walks `oauth_token` credentials ahead of expiry
-on a timer, since stock Interchange has no serving-time refresh hook.
-`start()` runs one pass immediately, so tokens that lapsed while the hub
-was down are fresh before anything re-registers, then arms the interval;
-`stop()` clears the interval and lets an in-flight pass finish. Its
-per-credential decision (claim, refresh, write) is also exported as
-`refreshCredential`, the shape a future Interchange serving-time hook
-would call directly for one credential.
-
-## Design notes
-
-- Nothing here names a provider, product, or default client id — config and
-  callback HTML are caller-supplied. Persistence is the host's callback.
-- `expiresAt` on `BaseTokens` is optional: RFC 6749 §5.1 makes `expires_in`
-  RECOMMENDED, not required, and this package never guesses a lifetime the
-  server didn't send.
-- `startOAuthLogin` stages the exchanged profile behind a `commit()` the
-  caller controls, so persistence can be gated on the host's own setup
-  succeeding first.
-- Callback hostnames are resolved once before binding. Every returned address
-  must be loopback (`127.0.0.0/8` or `::1`), and the validated address is bound
-  directly; wildcard and routable hosts are rejected. This is a cleartext
-  safeguard: the redirect carrying the authorization code travels as plain
-  HTTP, so a routable or wildcard bind would expose it on the network where
-  passive capture defeats the state check.
-- The token session coalesces concurrent refreshes for the same profile
-  into one in-flight request, since a provider that rotates refresh tokens
-  would otherwise invalidate a racing second attempt. Interchange's harness
-  injects `apiKey` at send; it does not refresh provider tokens.
-- `fetch`, `now`, and refresh skew are all injectable, so login and refresh
-  paths are testable without patching globals.
-
-## Not supported
-
-- No credential persistence — the host writes an Interchange `oauth_token`
-  or the OS vault.
-- No device-code flow — loopback redirect only.
-- No confidential client / client secret support — public clients (PKCE)
-  only.
-- No token revocation endpoint call.
-- Fixed-port loopback only, no dynamic port selection: authorization
-  servers only accept the registered `redirect_uri` for the client, so a
-  randomly chosen port would be rejected.
+`bun run format` rewrites the tree. `bun run check` is typecheck + lint + format:check + test.
 
 ## License
 
-LGPL-2.1-only. See LICENSE.
+LGPL-2.1-only.
