@@ -46,15 +46,15 @@ Caller config (endpoints, client id, redirect_uri, scopes, HTML)
 └─────────────────┘
 ```
 
-| Piece | Role |
-| --- | --- |
-| PKCE + state | One-attempt verifier/challenge (S256) and CSRF nonce. |
-| Authorize URL builder | `response_type=code` plus challenge, state, caller scopes. |
-| Loopback callback server | Fixed-port HTTP listener; state-checked before the code is trusted. |
-| Token client | Authorization-code exchange and refresh-token grant. Maps the response onto `BaseTokens` without guessing a lifetime. |
-| Login orchestrator | Starts the server, opens the browser, waits, exchanges, returns a staged profile. Closes the server on success, failure, or abort. |
-| Token session | Loads a named profile, refreshes within skew of expiry, coalesces concurrent callers. |
-| Hub mount | In-process login store, stock `oauth_token` write, due-credential refresher. |
+| Piece                    | Role                                                                                                                               |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| PKCE + state             | One-attempt verifier/challenge (S256) and CSRF nonce.                                                                              |
+| Authorize URL builder    | `response_type=code` plus challenge, state, caller scopes.                                                                         |
+| Loopback callback server | Fixed-port HTTP listener; state-checked before the code is trusted.                                                                |
+| Token client             | Authorization-code exchange and refresh-token grant. Maps the response onto `BaseTokens` without guessing a lifetime.              |
+| Login orchestrator       | Starts the server, opens the browser, waits, exchanges, returns a staged profile. Closes the server on success, failure, or abort. |
+| Token session            | Loads a named profile, refreshes within skew of expiry, coalesces concurrent callers.                                              |
+| Hub mount                | In-process login store, stock `oauth_token` write, due-credential refresher.                                                       |
 
 Persistence is a port (`saveProfile` / `loadProfile` / `updateTokens`), not
 a module in this package.
@@ -130,20 +130,20 @@ browser bundle never reaches them. The hub subpath:
 
 ## Failure modes
 
-| Condition | Behavior |
-| --- | --- |
-| Callback host is not loopback | Refuse to bind. |
-| Port in use / address unavailable | Typed bind errors; do not scan for another port. |
-| State mismatch | HTML failure page; abort as CSRF. |
-| `error=` or empty code | HTML failure page; abort. |
-| Abort signal | Callback wait fails; server closes. |
-| Token endpoint non-2xx | `OAuthTokenEndpointError` (hub refresh: reauth). |
-| 2xx payload fails validation | `OAuthTokenResponseSchemaError` (malformed `expires_in` must not become a never-expiring token). |
-| No refresh token in response or store | `OAuthMissingRefreshTokenError`. |
-| Named profile missing | `OAuthProfileNotFoundError`. |
-| Refresh throws | `OAuthRefreshFailedError` with cause; in-flight slot cleared. |
-| Hub login TTL elapsed | Cancel, abort, mark failed, drop the entry. |
-| Provider has no `refresh` | Leave the credential for a fresh sign-in. |
+| Condition                             | Behavior                                                                                         |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Callback host is not loopback         | Refuse to bind.                                                                                  |
+| Port in use / address unavailable     | Typed bind errors; do not scan for another port.                                                 |
+| State mismatch                        | HTML failure page; abort as CSRF.                                                                |
+| `error=` or empty code                | HTML failure page; abort.                                                                        |
+| Abort signal                          | Callback wait fails; server closes.                                                              |
+| Token endpoint non-2xx                | `OAuthTokenEndpointError` (hub refresh: reauth).                                                 |
+| 2xx payload fails validation          | `OAuthTokenResponseSchemaError` (malformed `expires_in` must not become a never-expiring token). |
+| No refresh token in response or store | `OAuthMissingRefreshTokenError`.                                                                 |
+| Named profile missing                 | `OAuthProfileNotFoundError`.                                                                     |
+| Refresh throws                        | `OAuthRefreshFailedError` with cause; in-flight slot cleared.                                    |
+| Hub login TTL elapsed                 | Cancel, abort, mark failed, drop the entry.                                                      |
+| Provider has no `refresh`             | Leave the credential for a fresh sign-in.                                                        |
 
 ## Out of scope
 

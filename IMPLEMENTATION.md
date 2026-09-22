@@ -110,7 +110,7 @@ entry points.
 - Default login TTL: 5 minutes. Default refresh interval: 60s. Default
   refresh margin: 10 minutes.
 - Credential type `oauth_token`; secrets sealed with `credentialAad(id,
-  "secret" | "refreshSecret")`. Metadata key `oauthProvider` names the
+"secret" | "refreshSecret")`. Metadata key `oauthProvider` names the
   registry entry the refresher matches.
 - Refresh claim: `FOR UPDATE SKIP LOCKED` in the same transaction that
   writes new material.
@@ -121,15 +121,15 @@ entry points.
 
 ## `OAuthClientConfig`
 
-| Field | Meaning |
-| --- | --- |
-| `clientId` | Public client id. |
-| `authorizeUrl` | Authorization endpoint. |
-| `tokenUrl` | Token endpoint. |
-| `redirectUri` | Registered loopback URI (`http://127.0.0.1:<port>/…`). |
-| `scopes` | Sent space-joined. |
-| `extraAuthorizeParams?` | Extra authorize query pairs a provider requires. |
-| `tokenTimeoutMs` | Abort bound for token HTTP. |
+| Field                   | Meaning                                                |
+| ----------------------- | ------------------------------------------------------ |
+| `clientId`              | Public client id.                                      |
+| `authorizeUrl`          | Authorization endpoint.                                |
+| `tokenUrl`              | Token endpoint.                                        |
+| `redirectUri`           | Registered loopback URI (`http://127.0.0.1:<port>/…`). |
+| `scopes`                | Sent space-joined.                                     |
+| `extraAuthorizeParams?` | Extra authorize query pairs a provider requires.       |
+| `tokenTimeoutMs`        | Abort bound for token HTTP.                            |
 
 ## Tooling
 
