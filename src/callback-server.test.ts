@@ -115,4 +115,14 @@ describe("Callback server startCallbackServer — state validation", () => {
       server.close();
     }
   });
+  test("closing before a redirect ends the wait", async () => {
+    const server = await startCallbackServer("state", config(0));
+    const waiting = server.waitForCode(new AbortController().signal);
+    server.close();
+
+    // Without this a caller that gave up would await a redirect that can no
+    // longer be received, and anything tracking the login would never learn
+    // it had ended.
+    await expect(waiting).rejects.toThrow(/closed before an authorization/);
+  });
 });

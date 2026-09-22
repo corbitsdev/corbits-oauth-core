@@ -261,6 +261,18 @@ export async function startCallbackServer(
       });
       return wait;
     },
-    close: () => server.close(),
+    // Closing the listener ends the wait: a caller that closes before a code
+    // arrives has given up on it, and anything awaiting `waitForCode` must
+    // hear that rather than wait for a redirect that can no longer land.
+    // A no-op once a code (or a refusal) has already settled the outcome.
+    close: () => {
+      server.close();
+      finish({
+        error: new OAuthCallbackError(
+          "aborted",
+          "The callback server was closed before an authorization arrived.",
+        ),
+      });
+    },
   };
 }
