@@ -71,7 +71,9 @@ declare function persist(profile: {
   tokens: BaseTokens;
   createdAt: number;
 }): Promise<void>;
-declare function load(name: string): Promise<{ tokens: BaseTokens } | undefined>;
+declare function load(
+  name: string,
+): Promise<{ tokens: BaseTokens } | undefined>;
 declare function update(name: string, tokens: BaseTokens): Promise<void>;
 
 const handle = await startOAuthLogin(
@@ -82,13 +84,18 @@ const handle = await startOAuthLogin(
         port: 8765,
         host: "127.0.0.1",
         path: "/callback",
-        doneHtml: "<html><body>Signed in — you can close this tab.</body></html>",
+        doneHtml:
+          "<html><body>Signed in — you can close this tab.</body></html>",
         failedHtml: (reason) =>
           `<html><body>Sign-in failed: ${reason}</body></html>`,
       }),
     buildAuthorizeUrl: (pkce, state) => buildAuthorizeUrl(config, pkce, state),
     exchangeCode: async (code, verifier, now) =>
-      baseTokensFromResponse(await exchangeCode(config, code, verifier), now, undefined),
+      baseTokensFromResponse(
+        await exchangeCode(config, code, verifier),
+        now,
+        undefined,
+      ),
     saveProfile: persist,
   },
 );
