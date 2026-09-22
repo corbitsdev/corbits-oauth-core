@@ -6,8 +6,10 @@ import { Hono, type MiddlewareHandler } from "hono";
 
 import {
   buildAuthorizeUrl,
+  createLoginRegistry,
   startCallbackServer,
   startOAuthLogin,
+  type CallbackFailure,
 } from "../index";
 import { persistOAuthCredential } from "./credentials";
 import { createLoginStore, type LoginState } from "./login-store";
@@ -26,8 +28,15 @@ const StartLogin = type({
 const DONE_HTML =
   "<!doctype html><meta charset=utf-8><title>Signed in</title><p>Signed in — you can close this tab and return to your workbench.";
 
-const failedHtml = (reason: string): string =>
-  `<!doctype html><meta charset=utf-8><title>Sign-in failed</title><p>Sign-in failed: ${reason.replace(/[<&]/g, "")}`;
+/** Plain stand-ins; a product with a brand passes its own pages instead. */
+const FAILURE_TEXT: Record<CallbackFailure["code"], string> = {
+  state_mismatch: "This page is no longer the sign-in this hub is waiting for.",
+  provider_error: "The provider refused the authorization.",
+  no_code: "The provider sent no authorization back.",
+};
+
+const failedHtml = (failure: CallbackFailure): string =>
+  `<!doctype html><meta charset=utf-8><title>Sign-in failed</title><p>${FAILURE_TEXT[failure.code]}`;
 
 export type MountOAuthLoginOpts = {
   readonly db: DB["db"];
@@ -53,6 +62,19 @@ export function mountOAuthLogin(
   opts: MountOAuthLoginOpts,
 ): void {
   const logins = createLoginStore();
+  // One live login per provider: its callback server binds the one port the
+  // authorization server will redirect to, so a second attempt has nowhere
+  // to listen. Resuming is also what keeps the authorize page already open
+  // in the operator's browser valid (CL-8857).
+  const inFlight = createLoginRegistry();
+  const loginIdOf = new Map<string, string>();
+  // Cleanup names the login it belongs to, never just its provider. A login
+  // leaves the registry the moment it settles, but its credential is still
+  // being stored; a newer login for the same provider -- possibly another
+  // principal's -- can already be live by then, and must not lose its id.
+  const releaseLoginId = (provider: string, loginId: string): void => {
+    if (loginIdOf.get(provider) === loginId) loginIdOf.delete(provider);
+  };
   const ttlMs = opts.loginTtlMs ?? DEFAULT_LOGIN_TTL_MS;
 
   const owner = (c: {
@@ -80,28 +102,35 @@ export function mountOAuthLogin(
     const target = callbackTargetFor(provider.oauthConfig);
     const abort = new AbortController();
 
-    let handle;
+    let started;
     try {
-      handle = await startOAuthLogin(
-        { profile: body.credentialName, signal: abort.signal },
-        {
-          startCallbackServer: (state) =>
-            startCallbackServer(state, {
-              port: target.port,
-              host: target.host,
-              path: target.path,
-              doneHtml: DONE_HTML,
-              failedHtml,
-            }),
-          buildAuthorizeUrl: (pkce, state) =>
-            buildAuthorizeUrl(provider.oauthConfig, pkce, state),
-          exchangeCode: (code, verifier, now) =>
-            provider.exchange(code, verifier, now),
-          // Persistence runs below once the login id exists to report against.
-          saveProfile: () => Promise.resolve(),
-          // The browser opens the authorize URL; the hub never owns a display.
-          openInBrowser: () => undefined,
-        },
+      started = await inFlight.startOrResume(
+        body.provider,
+        () =>
+          startOAuthLogin(
+            { profile: body.credentialName, signal: abort.signal },
+            {
+              startCallbackServer: (state) =>
+                startCallbackServer(state, {
+                  port: target.port,
+                  host: target.host,
+                  path: target.path,
+                  doneHtml: DONE_HTML,
+                  failedHtml,
+                }),
+              buildAuthorizeUrl: (pkce, state) =>
+                buildAuthorizeUrl(provider.oauthConfig, pkce, state),
+              exchangeCode: (code, verifier, now) =>
+                provider.exchange(code, verifier, now),
+              // Persistence runs below once the login id exists to report against.
+              saveProfile: () => Promise.resolve(),
+              // The browser opens the authorize URL; the hub never owns a display.
+              openInBrowser: () => undefined,
+            },
+          ),
+        // A login belongs to the principal who started it: resuming is for
+        // them, not for whoever asks next.
+        { tag: `${tenantId}:${principalId}` },
       );
     } catch (cause) {
       opts.onError?.(cause, { provider: body.provider });
@@ -111,13 +140,34 @@ export function mountOAuthLogin(
       );
     }
 
+    const handle = started.handle;
+    if (started.resumed) {
+      const loginId = loginIdOf.get(body.provider);
+      // Recorded below in the same tick a login is registered, so a live
+      // entry always has one; saying so beats inventing a second login.
+      if (loginId === undefined) {
+        return c.json(
+          { error: "a login is in flight but cannot be resumed" },
+          409,
+        );
+      }
+      return c.json({ loginId, authorizeUrl: handle.authorizeUrl }, 200);
+    }
+
     const loginId = logins.create({
       tenantId,
       principalId,
       expiresAt: Date.now() + ttlMs,
       abort,
-      cancel: handle.cancel,
+      // This login's own handle, not whatever is live under the provider:
+      // the TTL sweep can reach an expired entry after a newer login has
+      // taken the port, and cancelling by provider would end that one.
+      cancel: () => {
+        handle.cancel();
+        releaseLoginId(body.provider, loginId);
+      },
     });
+    loginIdOf.set(body.provider, loginId);
 
     // Detached on purpose: the redirect lands minutes after this response.
     void handle.completed.then(
@@ -136,12 +186,14 @@ export function mountOAuthLogin(
             metadata: provider.metadata?.(staged.profile.tokens) ?? {},
           });
           logins.settle(loginId, { status: "completed", credentialId });
+          releaseLoginId(body.provider, loginId);
         } catch (cause) {
           opts.onError?.(cause, { provider: body.provider });
           logins.settle(loginId, {
             status: "failed",
             message: "the tokens could not be stored",
           });
+          releaseLoginId(body.provider, loginId);
         }
       },
       (cause: unknown) => {
@@ -150,6 +202,7 @@ export function mountOAuthLogin(
           status: "failed",
           message: cause instanceof Error ? cause.message : String(cause),
         });
+        releaseLoginId(body.provider, loginId);
       },
     );
 

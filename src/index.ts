@@ -5,6 +5,9 @@ export { openInBrowser } from "./browser";
 export {
   startCallbackServer,
   OAuthCallbackError,
+  type CallbackErrorCode,
+  type CallbackFailure,
+  type CallbackFailureCode,
   OAuthCallbackPortInUseError,
   OAuthCallbackAddressUnavailableError,
   type CallbackServer,
@@ -32,6 +35,8 @@ export {
   type StagedOAuthProfile,
   type StartOAuthLoginOptions,
 } from "./login";
+
+export { createLoginRegistry, type LoginRegistry } from "./login-registry";
 
 export {
   createTokenSession,

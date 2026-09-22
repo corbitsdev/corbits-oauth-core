@@ -4,6 +4,7 @@ import {
   OAuthCallbackAddressUnavailableError,
   OAuthCallbackPortInUseError,
   startCallbackServer,
+  type CallbackFailure,
   type CallbackServer,
 } from "./index";
 
@@ -12,7 +13,8 @@ const config = (port: number, host?: string) => ({
   ...(host === undefined ? {} : { host }),
   path: "/callback",
   doneHtml: "<html>done</html>",
-  failedHtml: (reason: string) => `<html>failed: ${reason}</html>`,
+  failedHtml: (failure: CallbackFailure) =>
+    `<html>failed: ${failure.code}${failure.providerError === undefined ? "" : `:${failure.providerError}`}</html>`,
 });
 
 const getPort = (server: CallbackServer): number => {
@@ -97,20 +99,39 @@ describe("Callback server startCallbackServer — state validation", () => {
     expect(error.message).toContain("1234");
   });
 
-  test("rejects a redirect whose state does not match, without trusting the code", async () => {
+  test("refuses a redirect whose state does not match, without trusting the code", async () => {
     // Load-bearing: the state check is what stops a redirect from an
     // unrelated flow (or an attacker's crafted link) from being accepted as
     // this login's authorization code.
     const server = await startCallbackServer("expected-state", config(0));
     try {
       const waiting = server.waitForCode(new AbortController().signal);
-      const resPromise = fetch(
-        `http://127.0.0.1:${getPort(server)}/callback?code=some-code&state=wrong-state`,
+      const refused = await fetch(
+        `http://127.0.0.1:${getPort(server)}/callback?code=attacker-code&state=wrong-state`,
       );
-      await expect(waiting).rejects.toThrow(/state did not match/);
-      expect((await resPromise).status).toBe(400);
+      expect(refused.status).toBe(400);
+      expect(await refused.text()).toContain("state_mismatch");
+
+      // The refusal does not end the login: anything on the machine can reach
+      // this port, so a stray redirect must not be able to cancel the real one.
+      const genuine = await fetch(
+        `http://127.0.0.1:${getPort(server)}/callback?code=real-code&state=expected-state`,
+      );
+      expect(genuine.status).toBe(200);
+      expect(await waiting).toBe("real-code");
     } finally {
       server.close();
     }
+  });
+
+  test("closing before a redirect ends the wait", async () => {
+    const server = await startCallbackServer("state", config(0));
+    const waiting = server.waitForCode(new AbortController().signal);
+    server.close();
+
+    // Without this a caller that gave up would await a redirect that can no
+    // longer be received, and anything tracking the login would never learn
+    // it had ended.
+    await expect(waiting).rejects.toThrow(/closed before an authorization/);
   });
 });

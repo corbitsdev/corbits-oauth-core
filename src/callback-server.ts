@@ -56,18 +56,49 @@ export type CallbackServer = {
   close: () => void;
 };
 
+/**
+ * Why a redirect was refused, as a code rather than prose.
+ *
+ * What a person should be told differs by product and by brand, and none of
+ * it is this module's to decide; what the redirect actually was is. Callers
+ * map these onto their own copy.
+ *
+ * - `state_mismatch`: the redirect carried a state this listener did not
+ *   issue, so the authorization it belongs to is not the one being waited on.
+ * - `provider_error`: the authorization server itself reported a failure;
+ *   `providerError` carries its `error` parameter verbatim.
+ * - `no_code`: the redirect arrived with neither an authorization code nor
+ *   an error to explain its absence.
+ */
+export type CallbackFailureCode =
+  | "state_mismatch"
+  | "provider_error"
+  | "no_code";
+
+export type CallbackFailure = {
+  readonly code: CallbackFailureCode;
+  /** The authorization server's own `error` parameter, when it sent one. */
+  readonly providerError?: string;
+};
+
 export type CallbackServerConfig = {
   port: number;
   host?: string;
   path: string;
   doneHtml: string;
-  failedHtml: (reason: string) => string;
+  failedHtml: (failure: CallbackFailure) => string;
 };
 
+/** Why the wait for a code ended: a refused redirect, or the caller aborting. */
+export type CallbackErrorCode = CallbackFailureCode | "aborted";
+
 export class OAuthCallbackError extends Error {
-  constructor(message: string) {
+  readonly code: CallbackErrorCode;
+
+  constructor(code: CallbackErrorCode, message: string) {
     super(message);
     this.name = "OAuthCallbackError";
+    this.code = code;
   }
 }
 
@@ -154,28 +185,35 @@ export async function startCallbackServer(
     const error = url.searchParams.get("error");
     const state = url.searchParams.get("state");
 
+    // Refused, but the wait goes on. The listener is on a fixed loopback
+    // port anything on the machine can reach, and a redirect that is not
+    // this login's -- a stale tab, or a page firing a crafted link -- says
+    // nothing about the one being waited on. Ending the login here would let
+    // any such request cancel a legitimate sign-in.
     if (state !== expectedState) {
       res.statusCode = 400;
       res.setHeader("content-type", "text/html; charset=utf-8");
-      res.end(config.failedHtml("state mismatch"));
-      finish({
-        error: new OAuthCallbackError(
-          "Authorization state did not match; possible CSRF - login aborted.",
-        ),
-      });
+      res.end(config.failedHtml({ code: "state_mismatch" }));
       return;
     }
 
-    const reason =
-      error ?? (isNonEmptyCode(code) ? undefined : "no code returned");
-    res.statusCode = reason === undefined ? 200 : 400;
+    const failure: CallbackFailure | undefined =
+      error !== null
+        ? { code: "provider_error", providerError: error }
+        : isNonEmptyCode(code)
+          ? undefined
+          : { code: "no_code" };
+    res.statusCode = failure === undefined ? 200 : 400;
     res.setHeader("content-type", "text/html; charset=utf-8");
-    res.end(reason === undefined ? config.doneHtml : config.failedHtml(reason));
+    res.end(
+      failure === undefined ? config.doneHtml : config.failedHtml(failure),
+    );
 
-    if (reason !== undefined || !isNonEmptyCode(code)) {
+    if (failure !== undefined || !isNonEmptyCode(code)) {
       finish({
         error: new OAuthCallbackError(
-          `Authorization failed: ${reason ?? "no code returned"}`,
+          failure?.code ?? "no_code",
+          `Authorization failed: ${failure?.providerError ?? "no code returned"}`,
         ),
       });
     } else {
@@ -203,11 +241,12 @@ export async function startCallbackServer(
   return {
     port: address.port,
     waitForCode: (signal: AbortSignal) => {
-      if (signal.aborted) finish({ error: new OAuthCallbackError("aborted") });
+      if (signal.aborted)
+        finish({ error: new OAuthCallbackError("aborted", "aborted") });
       else
         signal.addEventListener(
           "abort",
-          () => finish({ error: new OAuthCallbackError("aborted") }),
+          () => finish({ error: new OAuthCallbackError("aborted", "aborted") }),
           { once: true },
         );
       if (wait !== undefined) return wait;
@@ -221,6 +260,18 @@ export async function startCallbackServer(
       });
       return wait;
     },
-    close: () => server.close(),
+    // Closing the listener ends the wait: a caller that closes before a code
+    // arrives has given up on it, and anything awaiting `waitForCode` must
+    // hear that rather than wait for a redirect that can no longer land.
+    // A no-op once a code (or a refusal) has already settled the outcome.
+    close: () => {
+      server.close();
+      finish({
+        error: new OAuthCallbackError(
+          "aborted",
+          "The callback server was closed before an authorization arrived.",
+        ),
+      });
+    },
   };
 }
