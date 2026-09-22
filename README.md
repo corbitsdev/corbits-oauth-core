@@ -41,15 +41,24 @@ const config: OAuthClientConfig = {
   tokenTimeoutMs: 10_000,
 };
 
-declare function persist(profile: {
+// Host-owned persistence: an Interchange `oauth_token` credential, OS vault,
+// or otherwise. The Map stands in for whichever the host uses.
+const store = new Map<string, BaseTokens>();
+
+async function persist(profile: {
   name: string;
   tokens: BaseTokens;
   createdAt: number;
-}): Promise<void>;
-declare function load(
-  name: string,
-): Promise<{ tokens: BaseTokens } | undefined>;
-declare function update(name: string, tokens: BaseTokens): Promise<void>;
+}): Promise<void> {
+  store.set(profile.name, profile.tokens);
+}
+async function load(name: string): Promise<{ tokens: BaseTokens } | undefined> {
+  const tokens = store.get(name);
+  return tokens === undefined ? undefined : { tokens };
+}
+async function update(name: string, tokens: BaseTokens): Promise<void> {
+  store.set(name, tokens);
+}
 
 const handle = await startOAuthLogin(
   { profile: "default", signal: new AbortController().signal },
@@ -94,29 +103,7 @@ const session = createTokenSession<BaseTokens, string>({
 const accessToken = await session.getValidToken("default");
 ```
 
-Hand `accessToken` to `InferenceSource.apiKey` — that injection is the host's job.
-
-A hub that wants a browser-driven login mounts `@corbits/oauth-core/hub`:
-
-```ts
-import { Hono } from "hono";
-import { mountOAuthLogin } from "@corbits/oauth-core/hub";
-import { exchangeXaiCode, xaiOAuthConfig } from "@corbits/xai-provider";
-
-const api = new Hono(); // your tenant router
-
-mountOAuthLogin(api, {
-  db, // your drizzle handle
-  cipher, // your CredentialCipher
-  requireGrant, // your grant middleware
-  providers: {
-    xai: {
-      oauthConfig: xaiOAuthConfig,
-      exchange: (code, verifier, now) => exchangeXaiCode(code, verifier, now),
-    },
-  },
-});
-```
+Hand `accessToken` to `InferenceSource.apiKey` — that injection is the host's job. A hub that wants a browser-driven login mounts `mountOAuthLogin` from `@corbits/oauth-core/hub` with its drizzle db, `CredentialCipher`, grant middleware, and provider entries instead of driving `startOAuthLogin` in-process.
 
 ## How it works
 
