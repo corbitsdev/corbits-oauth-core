@@ -185,16 +185,15 @@ export async function startCallbackServer(
     const error = url.searchParams.get("error");
     const state = url.searchParams.get("state");
 
+    // Refused, but the wait goes on. The listener is on a fixed loopback
+    // port anything on the machine can reach, and a redirect that is not
+    // this login's -- a stale tab, or a page firing a crafted link -- says
+    // nothing about the one being waited on. Ending the login here would let
+    // any such request cancel a legitimate sign-in.
     if (state !== expectedState) {
       res.statusCode = 400;
       res.setHeader("content-type", "text/html; charset=utf-8");
       res.end(config.failedHtml({ code: "state_mismatch" }));
-      finish({
-        error: new OAuthCallbackError(
-          "state_mismatch",
-          "Authorization state did not match; possible CSRF - login aborted.",
-        ),
-      });
       return;
     }
 
