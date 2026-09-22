@@ -44,7 +44,7 @@ export {
   type OAuthLoginProvider,
 } from "./provider.js";
 
-export { createLoginRegistry, type LoginRegistry } from "./login-registry";
+export { createLoginRegistry, type LoginRegistry } from "./login-registry.js";
 
 export {
   createTokenSession,

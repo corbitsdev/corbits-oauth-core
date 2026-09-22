@@ -1,5 +1,5 @@
-import type { OAuthLoginHandle } from "./login";
-import type { BaseTokens } from "./tokens";
+import type { OAuthLoginHandle } from "./login.js";
+import type { BaseTokens } from "./tokens.js";
 
 /**
  * One live login per key, so a second attempt resumes the first.

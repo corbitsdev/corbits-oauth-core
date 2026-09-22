@@ -18,6 +18,7 @@ import {
   type BaseTokens,
   type CallbackServer,
   type FetchLike,
+  type OAuthLoginHandle,
   type OAuthClientConfig,
 } from "../index.js";
 import {
@@ -170,6 +171,13 @@ export function mountOAuthLogin(
   // in the operator's browser valid (CL-8857).
   const inFlight = createLoginRegistry();
   const loginIdOf = new Map<string, string>();
+  // Cleanup names the login it belongs to, never just its provider. A login
+  // leaves the registry the moment it settles, but its credential is still
+  // being stored; a newer login for the same provider -- possibly another
+  // principal's -- can already be live by then, and must not lose its id.
+  const releaseLoginId = (provider: string, loginId: string): void => {
+    if (loginIdOf.get(provider) === loginId) loginIdOf.delete(provider);
+  };
   const ttlMs = opts.loginTtlMs ?? DEFAULT_LOGIN_TTL_MS;
   if (opts.callbackUrl !== undefined) assertSecureCallbackUrl(opts.callbackUrl);
 
@@ -300,7 +308,7 @@ export function mountOAuthLogin(
     const { flow } = resolved;
     const abort = new AbortController();
 
-    let started;
+    let started: { handle: OAuthLoginHandle<BaseTokens>; resumed: boolean };
     try {
       started = await inFlight.startOrResume(
         flow.provider,
@@ -348,9 +356,12 @@ export function mountOAuthLogin(
       principalId,
       expiresAt: Date.now() + ttlMs,
       abort,
+      // This login's own handle, not whatever is live under the provider:
+      // the TTL sweep can reach an expired entry after a newer login has
+      // taken the port, and cancelling by provider would end that one.
       cancel: () => {
-        inFlight.cancel(flow.provider);
-        loginIdOf.delete(flow.provider);
+        handle.cancel();
+        releaseLoginId(flow.provider, loginId);
       },
     });
     loginIdOf.set(flow.provider, loginId);
@@ -372,7 +383,7 @@ export function mountOAuthLogin(
             metadata: flow.metadata(staged.profile.tokens),
           });
           logins.settle(loginId, { status: "completed", credentialId });
-          loginIdOf.delete(flow.provider);
+          releaseLoginId(flow.provider, loginId);
         } catch (cause) {
           opts.onError?.(cause, { provider: flow.provider });
           logins.settle(loginId, {
@@ -382,7 +393,7 @@ export function mountOAuthLogin(
                 ? cause.message
                 : "the tokens could not be stored",
           });
-          loginIdOf.delete(flow.provider);
+          releaseLoginId(flow.provider, loginId);
         }
       },
       (cause: unknown) => {
@@ -391,7 +402,7 @@ export function mountOAuthLogin(
           status: "failed",
           message: cause instanceof Error ? cause.message : String(cause),
         });
-        loginIdOf.delete(flow.provider);
+        releaseLoginId(flow.provider, loginId);
       },
     );
 
