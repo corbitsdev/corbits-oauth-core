@@ -20,4 +20,4 @@ export {
   type OAuthTokenRefresher,
   type OAuthTokenRefresherOpts,
 } from "./refresh";
-export type { LoginState } from "./login-store";
+export { createLoginStore, type LoginState } from "./login-store";
