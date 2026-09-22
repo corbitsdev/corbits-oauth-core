@@ -35,49 +35,53 @@ import {
   createOAuthTokenRefresher,
   mountOAuthLogin,
   type OAuthLoginProviders,
+  type OAuthTokenRefresher,
 } from "@corbits/oauth-core/hub";
 import type { DB } from "@intx/db";
 import type { TenantEnv } from "@intx/hub-api";
 import type { CredentialCipher } from "@intx/types";
 import { Hono, type MiddlewareHandler } from "hono";
 
-declare const db: DB["db"];
-declare const cipher: CredentialCipher;
-// The host's own grant middleware, e.g. from `createRequireGrant` — checked
-// once, the host's way, before a login can start.
-declare const requireGrant: MiddlewareHandler<TenantEnv>;
-// Provider packages the host has installed, e.g. `@corbits/xai-provider`.
-declare const providers: OAuthLoginProviders;
-// The host's tenant-scoped router, mounted under its own tenant prefix.
-declare const app: Hono<TenantEnv>;
-
-const oauthLoginApi = new Hono<TenantEnv>();
-
-mountOAuthLogin(oauthLoginApi, {
-  db,
-  cipher,
-  requireGrant,
-  providers,
-  onError: (error, { provider }) => {
-    console.error(`oauth login failed for ${provider}`, error);
+export function installOAuthLogin(
+  app: Hono<TenantEnv>,
+  opts: {
+    db: DB["db"];
+    cipher: CredentialCipher;
+    // The host's own grant middleware, e.g. from `createRequireGrant` —
+    // checked once, the host's way, before a login can start.
+    requireGrant: MiddlewareHandler<TenantEnv>;
+    // Provider packages the host has installed, e.g. `@corbits/xai-provider`.
+    providers: OAuthLoginProviders;
+    // Required: a refresh only reaches the DB. A sidecar already running
+    // with the old token keeps using it until something tells it to reload,
+    // so the host must push or notify its running consumers here — see
+    // "Keeping running consumers in sync" below.
+    onRefreshed: (context: { tenantId: string; credentialId: string }) => void;
+    onError: (error: unknown) => void;
   },
-});
+): OAuthTokenRefresher {
+  const oauthLoginApi = new Hono<TenantEnv>();
 
-app.route("/api/tenants/:tenantId", oauthLoginApi);
+  mountOAuthLogin(oauthLoginApi, {
+    db: opts.db,
+    cipher: opts.cipher,
+    requireGrant: opts.requireGrant,
+    providers: opts.providers,
+    onError: (error) => opts.onError(error),
+  });
+  app.route("/api/tenants/:tenantId", oauthLoginApi);
 
-const refresher = createOAuthTokenRefresher({
-  db,
-  cipher,
-  providers,
-  intervalMs: 60_000,
-  onRefreshed: ({ tenantId, credentialId }) => {
-    // Push the renewed credential to whatever holds a live copy.
-  },
-  onError: (error, { provider, credentialId }) => {
-    console.error(`oauth refresh failed`, { provider, credentialId, error });
-  },
-});
-refresher.start();
+  const refresher = createOAuthTokenRefresher({
+    db: opts.db,
+    cipher: opts.cipher,
+    providers: opts.providers,
+    intervalMs: 60_000,
+    onRefreshed: (context) => opts.onRefreshed(context),
+    onError: (error) => opts.onError(error),
+  });
+  refresher.start();
+  return refresher; // host calls .stop() on shutdown
+}
 ```
 
 `mountOAuthLogin` adds `POST /oauth-logins` (starts a login and returns an
@@ -85,6 +89,17 @@ authorize URL and a login id — the PKCE verifier and the loopback callback
 listener never leave this process), `GET /oauth-logins/:loginId` (poll for
 completion), and `DELETE /oauth-logins/:loginId` (cancel). The browser only
 ever learns the id of the credential the tokens landed in.
+
+#### Keeping running consumers in sync
+
+`createOAuthTokenRefresher` only writes the renewed token to the credential
+row; it does not know what, if anything, is holding a live copy of the old
+one. A host that runs long-lived processes against a credential — sidecars,
+workers, anything that loaded the token into memory rather than re-reading it
+per call — has to push or notify those processes itself from `onRefreshed`,
+or they keep using the stale token until they happen to restart or redeploy,
+even though the database already has the fresh one. That is why `onRefreshed`
+is a required callback here rather than an optional log hook.
 
 ### Lower-level: a CLI/desktop login
 
@@ -102,73 +117,73 @@ import {
   startOAuthLogin,
   type BaseTokens,
   type OAuthClientConfig,
+  type OAuthLoginDeps,
+  type TokenSessionDeps,
 } from "@corbits/oauth-core";
 
-const config: OAuthClientConfig = {
-  clientId: "my-client-id",
-  authorizeUrl: "https://provider.example.com/oauth/authorize",
-  tokenUrl: "https://provider.example.com/oauth/token",
-  redirectUri: "http://127.0.0.1:8765/callback",
-  scopes: ["profile"],
-  tokenTimeoutMs: 10_000,
+// Host-owned persistence — an OS keychain, an encrypted file, whatever this
+// particular host already uses to hold secrets at rest. The field types
+// come straight from the library's own dependency types, so a store that
+// satisfies this shape also satisfies `startOAuthLogin` and
+// `createTokenSession` directly.
+type ProfileStore = {
+  persist: OAuthLoginDeps<BaseTokens>["saveProfile"];
+  load: TokenSessionDeps<BaseTokens, string>["loadProfile"];
+  update: TokenSessionDeps<BaseTokens, string>["updateTokens"];
 };
 
-// Host-owned persistence — an OS keychain, an encrypted file, whatever this
-// particular host already uses to hold secrets at rest.
-declare function persist(profile: {
-  name: string;
-  tokens: BaseTokens;
-  createdAt: number;
-}): Promise<void>;
-declare function load(
-  name: string,
-): Promise<{ tokens: BaseTokens } | undefined>;
-declare function update(name: string, tokens: BaseTokens): Promise<void>;
+export async function loginAndGetToken(
+  config: OAuthClientConfig,
+  store: ProfileStore,
+): Promise<string> {
+  // The callback server binds exactly what `redirectUri` names.
+  const redirect = new URL(config.redirectUri);
+  const handle = await startOAuthLogin(
+    { profile: "default", signal: new AbortController().signal },
+    {
+      startCallbackServer: (state) =>
+        startCallbackServer(state, {
+          port: Number(redirect.port),
+          host: redirect.hostname,
+          path: redirect.pathname,
+          doneHtml:
+            "<html><body>Signed in — you can close this tab.</body></html>",
+          failedHtml: (reason) =>
+            `<html><body>Sign-in failed: ${reason}</body></html>`,
+        }),
+      buildAuthorizeUrl: (pkce, state) =>
+        buildAuthorizeUrl(config, pkce, state),
+      exchangeCode: async (code, verifier, now) =>
+        baseTokensFromResponse(
+          await exchangeCode(config, code, verifier),
+          now,
+          undefined,
+        ),
+      saveProfile: store.persist,
+    },
+  );
 
-const handle = await startOAuthLogin(
-  { profile: "default", signal: new AbortController().signal },
-  {
-    startCallbackServer: (state) =>
-      startCallbackServer(state, {
-        port: 8765,
-        host: "127.0.0.1",
-        path: "/callback",
-        doneHtml:
-          "<html><body>Signed in — you can close this tab.</body></html>",
-        failedHtml: (reason) =>
-          `<html><body>Sign-in failed: ${reason}</body></html>`,
-      }),
-    buildAuthorizeUrl: (pkce, state) => buildAuthorizeUrl(config, pkce, state),
-    exchangeCode: async (code, verifier, now) =>
+  const staged = await handle.completed;
+  await staged.commit();
+
+  const session = createTokenSession<BaseTokens, string>({
+    skewMs: 30_000,
+    loadProfile: store.load,
+    updateTokens: store.update,
+    refreshTokens: async (refreshToken, now) =>
       baseTokensFromResponse(
-        await exchangeCode(config, code, verifier),
+        await refreshTokenRequest(config, refreshToken),
         now,
-        undefined,
+        refreshToken,
       ),
-    saveProfile: persist,
-  },
-);
+    toAccess: (tokens) => tokens.access,
+  });
 
-const staged = await handle.completed;
-await staged.commit();
-
-const session = createTokenSession<BaseTokens, string>({
-  skewMs: 30_000,
-  loadProfile: load,
-  updateTokens: update,
-  refreshTokens: async (refreshToken, now) =>
-    baseTokensFromResponse(
-      await refreshTokenRequest(config, refreshToken),
-      now,
-      refreshToken,
-    ),
-  toAccess: (tokens) => tokens.access,
-});
-
-const accessToken = await session.getValidToken("default");
+  return session.getValidToken("default");
+}
 ```
 
-Hand `accessToken` to `InferenceSource.apiKey` — that injection is the
+Hand the returned token to `InferenceSource.apiKey` — that injection is the
 host's job.
 
 ## How it works
