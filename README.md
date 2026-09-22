@@ -17,31 +17,6 @@ bun add @corbits/oauth-core
 
 One flow shape: public client, PKCE S256, fixed-port loopback, no client secret.
 
-```ts
-import {
-  buildAuthorizeUrl,
-  exchangeCode,
-  startCallbackServer,
-  startOAuthLogin,
-  type OAuthClientConfig,
-} from "@corbits/oauth-core";
-
-const config: OAuthClientConfig = {
-  clientId: "my-client-id",
-  authorizeUrl: "https://provider.example.com/oauth/authorize",
-  tokenUrl: "https://provider.example.com/oauth/token",
-  redirectUri: "http://127.0.0.1:8765/callback",
-  scopes: ["profile"],
-  tokenTimeoutMs: 10_000,
-};
-
-void buildAuthorizeUrl;
-void exchangeCode;
-void startCallbackServer;
-void startOAuthLogin;
-void config;
-```
-
 Typical callers: `@corbits/xai-provider`, `@corbits/codex-provider`.
 
 ```ts
@@ -117,22 +92,27 @@ const session = createTokenSession<BaseTokens, string>({
 });
 
 const accessToken = await session.getValidToken("default");
-void accessToken;
 ```
+
+Hand `accessToken` to `InferenceSource.apiKey` — that injection is the host's job.
 
 A hub that wants a browser-driven login mounts `@corbits/oauth-core/hub`:
 
 ```ts
+import { Hono } from "hono";
 import { mountOAuthLogin } from "@corbits/oauth-core/hub";
+import { exchangeXaiCode, xaiOAuthConfig } from "@corbits/xai-provider";
+
+const api = new Hono(); // your tenant router
 
 mountOAuthLogin(api, {
-  db,
-  cipher: credentialCipher,
-  requireGrant: requireGrant("credential:*", "create"),
+  db, // your drizzle handle
+  cipher, // your CredentialCipher
+  requireGrant, // your grant middleware
   providers: {
-    someProvider: {
-      oauthConfig,
-      exchange: (code, verifier, now) => exchangeSomeCode(code, verifier, now),
+    xai: {
+      oauthConfig: xaiOAuthConfig,
+      exchange: (code, verifier, now) => exchangeXaiCode(code, verifier, now),
     },
   },
 });
