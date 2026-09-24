@@ -5,6 +5,8 @@
   "license": "LGPL-2.1-only",
   "author": "Corbits",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "sideEffects": false,
   "files": [
     "dist",
@@ -16,12 +18,10 @@
   },
   "exports": {
     ".": {
-      "intx-src": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./hub": {
-      "intx-src": "./src/hub/index.ts",
       "types": "./dist/hub/index.d.ts",
       "default": "./dist/hub/index.js"
     }
