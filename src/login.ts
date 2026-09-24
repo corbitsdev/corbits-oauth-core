@@ -1,7 +1,7 @@
-import { openInBrowser } from "./browser";
-import type { CallbackServer } from "./callback-server";
-import { generatePkce, generateState, type Pkce } from "./pkce";
-import type { AuthProfile, BaseTokens } from "./tokens";
+import { openInBrowser } from "./browser.js";
+import type { CallbackServer } from "./callback-server.js";
+import { generatePkce, generateState, type Pkce } from "./pkce.js";
+import type { AuthProfile, BaseTokens } from "./tokens.js";
 
 export type StagedOAuthProfile<TTokens extends BaseTokens> = {
   readonly profile: AuthProfile<TTokens>;

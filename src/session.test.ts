@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createTokenSession, type BaseTokens } from "./index";
+import { createTokenSession, type BaseTokens } from "./index.js";
 
 describe("Token session createTokenSession — refresh coalescing", () => {
   test("coalesces concurrent refreshes for the same profile into one request", async () => {

@@ -1,4 +1,4 @@
-import type { BaseTokens } from "./tokens";
+import type { BaseTokens } from "./tokens.js";
 
 /**
  * Whether `tokens` is at or within `skewMs` of its expiry at `now`.

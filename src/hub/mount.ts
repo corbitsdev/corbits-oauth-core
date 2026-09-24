@@ -8,10 +8,10 @@ import {
   buildAuthorizeUrl,
   startCallbackServer,
   startOAuthLogin,
-} from "../index";
-import { persistOAuthCredential } from "./credentials";
-import { createLoginStore, type LoginState } from "./login-store";
-import { callbackTargetFor, type OAuthLoginProviders } from "./registry";
+} from "../index.js";
+import { persistOAuthCredential } from "./credentials.js";
+import { createLoginStore, type LoginState } from "./login-store.js";
+import { callbackTargetFor, type OAuthLoginProviders } from "./registry.js";
 
 /** An abandoned login holds a fixed loopback port, so it is not held long. */
 const DEFAULT_LOGIN_TTL_MS = 5 * 60 * 1000;

@@ -1,6 +1,6 @@
 import { type } from "arktype";
 
-import type { FetchLike, OAuthClientConfig } from "./client";
+import type { FetchLike, OAuthClientConfig } from "./client.js";
 
 // Generic MCP-OAuth discovery (RFC 9728 protected-resource metadata, RFC 8414
 // authorization-server metadata) plus RFC 7591 dynamic client registration.

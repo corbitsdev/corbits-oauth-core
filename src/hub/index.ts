@@ -1,15 +1,15 @@
 // Server-only entry point: the hub-hosted login mount. The root export
 // stays free of `hono` and `@intx/*` so browser bundles never reach them.
-export { mountOAuthLogin, type MountOAuthLoginOpts } from "./mount";
+export { mountOAuthLogin, type MountOAuthLoginOpts } from "./mount.js";
 export {
   callbackTargetFor,
   type OAuthLoginProvider,
   type OAuthLoginProviders,
-} from "./registry";
+} from "./registry.js";
 export {
   persistOAuthCredential,
   OAUTH_PROVIDER_METADATA_KEY,
-} from "./credentials";
+} from "./credentials.js";
 export {
   createOAuthRefreshStore,
   createOAuthTokenRefresher,
@@ -19,5 +19,5 @@ export {
   type OAuthRefreshStore,
   type OAuthTokenRefresher,
   type OAuthTokenRefresherOpts,
-} from "./refresh";
-export { createLoginStore, type LoginState } from "./login-store";
+} from "./refresh.js";
+export { createLoginStore, type LoginState } from "./login-store.js";

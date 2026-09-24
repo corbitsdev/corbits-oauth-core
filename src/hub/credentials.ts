@@ -4,7 +4,7 @@ import { generateId } from "@intx/hub-common";
 import { credentialAad, type CredentialCipher } from "@intx/types";
 import { eq } from "drizzle-orm";
 
-import type { BaseTokens } from "../index";
+import type { BaseTokens } from "../index.js";
 
 /**
  * Credential-metadata key naming the registered provider the tokens were

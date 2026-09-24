@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 
-import { generatePkce } from "./index";
+import { generatePkce } from "./index.js";
 
 function base64urlDecode(value: string): Buffer {
   return Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");

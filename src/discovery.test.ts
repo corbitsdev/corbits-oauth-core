@@ -11,7 +11,7 @@ import {
   selectMcpScopes,
   type FetchLike,
   type McpLoginEntry,
-} from "./index";
+} from "./index.js";
 
 const resourceUrl = "https://mcp.example.com/mcp";
 

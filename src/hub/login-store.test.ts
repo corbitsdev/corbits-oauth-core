@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { createLoginStore } from "./login-store";
+import { createLoginStore } from "./login-store.js";
 
 const alice = { tenantId: "tenant_1", principalId: "principal_alice" };
 const bob = { tenantId: "tenant_1", principalId: "principal_bob" };

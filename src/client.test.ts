@@ -6,7 +6,7 @@ import {
   OAuthTokenResponseSchemaError,
   type FetchLike,
   type OAuthClientConfig,
-} from "./index";
+} from "./index.js";
 
 const config: OAuthClientConfig = {
   clientId: "client-id",
