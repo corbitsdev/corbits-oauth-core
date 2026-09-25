@@ -37,7 +37,7 @@
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "dependencies": {
-    "arktype": "2.2.3",
+    "arktype": "^2.2.3",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.11.9",
     "@intx/db": "^0.4.0",
