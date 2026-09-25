@@ -1,5 +1,7 @@
-import type { OAuthClientConfig } from "./client.js";
-import type { BaseTokens } from "./tokens.js";
+import { startCallbackServer } from "./callback-server.js";
+import { buildAuthorizeUrl, type OAuthClientConfig } from "./client.js";
+import { startOAuthLogin, type OAuthLoginDeps } from "./login.js";
+import type { AuthProfile, BaseTokens } from "./tokens.js";
 
 /**
  * One OAuth provider a host offers for login. The host owns the provider
@@ -61,3 +63,49 @@ export const signedInHtml =
 // `reason` echoes the redirect's `error` parameter, which anyone can set.
 export const signInFailedHtml = (reason: string): string =>
   `<!doctype html><meta charset=utf-8><title>Sign-in failed</title><p>Sign-in failed: ${reason.replace(/[<&]/g, "")}`;
+
+export type LoginWithProviderOptions = {
+  save: OAuthLoginDeps<BaseTokens>["saveProfile"];
+  profile: string;
+  signal: AbortSignal;
+  openInBrowser: (url: string) => void;
+};
+
+/**
+ * Run the loopback PKCE login against `provider`'s fixed redirect_uri, save
+ * the exchanged profile, and return it. Hosts that need their own callback
+ * pages, or to show the staged profile before committing it, use
+ * `startOAuthLogin`. `provider.metadata` is not applied: the profile holds
+ * tokens only, and the host derives any metadata from them when it stores
+ * the credential.
+ */
+export async function loginWithProvider(
+  provider: OAuthLoginProvider,
+  opts: LoginWithProviderOptions,
+): Promise<AuthProfile<BaseTokens>> {
+  const target = callbackTargetFor(provider.oauthConfig);
+  const login = await startOAuthLogin(
+    {
+      profile: opts.profile,
+      signal: opts.signal,
+    },
+    {
+      startCallbackServer: (state) =>
+        startCallbackServer(state, {
+          host: target.host,
+          port: target.port,
+          path: target.path,
+          doneHtml: signedInHtml,
+          failedHtml: signInFailedHtml,
+        }),
+      buildAuthorizeUrl: (pkce, state) =>
+        buildAuthorizeUrl(provider.oauthConfig, pkce, state),
+      exchangeCode: provider.exchange,
+      saveProfile: opts.save,
+      openInBrowser: opts.openInBrowser,
+    },
+  );
+  const staged = await login.completed;
+  await staged.commit();
+  return staged.profile;
+}
