@@ -5,7 +5,7 @@ import {
   OAuthCallbackPortInUseError,
   startCallbackServer,
   type CallbackServer,
-} from "./index";
+} from "./index.js";
 
 const config = (port: number, host?: string) => ({
   port,

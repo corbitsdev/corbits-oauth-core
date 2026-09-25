@@ -1,4 +1,4 @@
-import type { BaseTokens, OAuthClientConfig } from "../index";
+import type { BaseTokens, OAuthClientConfig } from "../index.js";
 
 /**
  * One provider a host offers for hub-hosted login. The host owns the

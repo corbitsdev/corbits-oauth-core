@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
-import { OAuthTokenEndpointError, type BaseTokens } from "../index";
+import { OAuthTokenEndpointError, type BaseTokens } from "../index.js";
 import {
   createRefreshTicker,
   refreshCredential,
   type OAuthRefreshStore,
-} from "./refresh";
-import type { OAuthLoginProviders } from "./registry";
+} from "./refresh.js";
+import type { OAuthLoginProviders } from "./registry.js";
 
 const MINUTE = 60_000;
 

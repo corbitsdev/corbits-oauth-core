@@ -4,7 +4,7 @@ PKCE + loopback OAuth for an Interchange host: mint an OAuth token the host stor
 
 ## Runtime support
 
-Bun >= 1.2 runs the published TypeScript source. Node >= 24 is an engines floor for tooling; native Node does not load this extensionless TypeScript source as-is.
+Bun >= 1.2 and Node >= 24 consume the published compiled `dist/` output.
 
 ## Quickstart
 

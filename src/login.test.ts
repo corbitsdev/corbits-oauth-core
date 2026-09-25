@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { startOAuthLogin, type BaseTokens, type CallbackServer } from "./index";
+import {
+  startOAuthLogin,
+  type BaseTokens,
+  type CallbackServer,
+} from "./index.js";
 
 function fakeCallbackServer(code: string): CallbackServer & { closed: number } {
   const server = {

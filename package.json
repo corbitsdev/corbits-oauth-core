@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "description": "Provider-agnostic OAuth 2.0 authorization-code + PKCE login for desktop/CLI hosts.",
   "license": "LGPL-2.1-only",
-  "author": "Corbits",
+  "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "sideEffects": false,
   "files": [
-    "src",
-    "!src/**/*.test.ts",
+    "dist",
     "README.md",
     "LICENSE"
   ],
@@ -16,10 +17,18 @@
     "access": "public"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./hub": "./src/hub/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./hub": {
+      "types": "./dist/hub/index.d.ts",
+      "default": "./dist/hub/index.js"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "bun run build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",

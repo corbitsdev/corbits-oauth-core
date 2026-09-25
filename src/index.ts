@@ -1,6 +1,6 @@
-export { generatePkce, generateState, type Pkce } from "./pkce";
+export { generatePkce, generateState, type Pkce } from "./pkce.js";
 
-export { openInBrowser } from "./browser";
+export { openInBrowser } from "./browser.js";
 
 export {
   startCallbackServer,
@@ -9,9 +9,9 @@ export {
   OAuthCallbackAddressUnavailableError,
   type CallbackServer,
   type CallbackServerConfig,
-} from "./callback-server";
+} from "./callback-server.js";
 
-export type { AuthProfile, BaseTokens } from "./tokens";
+export type { AuthProfile, BaseTokens } from "./tokens.js";
 export {
   buildAuthorizeUrl,
   baseTokensFromResponse,
@@ -23,7 +23,7 @@ export {
   type FetchLike,
   type OAuthClientConfig,
   type TokenResponse,
-} from "./client";
+} from "./client.js";
 
 export {
   startOAuthLogin,
@@ -31,7 +31,7 @@ export {
   type OAuthLoginHandle,
   type StagedOAuthProfile,
   type StartOAuthLoginOptions,
-} from "./login";
+} from "./login.js";
 
 export {
   createTokenSession,
@@ -40,7 +40,7 @@ export {
   OAuthRefreshFailedError,
   type TokenSession,
   type TokenSessionDeps,
-} from "./session";
+} from "./session.js";
 
 export {
   discoverMcpLoginEntry,
@@ -55,4 +55,4 @@ export {
   type McpLoginEntry,
   type RegisterMcpClientOptions,
   type SelectMcpScopesOptions,
-} from "./discovery";
+} from "./discovery.js";

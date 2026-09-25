@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { callbackTargetFor } from "./registry";
+import { callbackTargetFor } from "./registry.js";
 
 const base = {
   clientId: "client",

@@ -1,7 +1,7 @@
 import { type } from "arktype";
 
-import type { Pkce } from "./pkce";
-import type { BaseTokens } from "./tokens";
+import type { Pkce } from "./pkce.js";
+import type { BaseTokens } from "./tokens.js";
 
 // Provider-agnostic OAuth client config. Endpoints, client id, scopes, and
 // timeouts are supplied by the caller; this module owns only the shared

@@ -4,9 +4,12 @@ import { credentialAad, type CredentialCipher } from "@intx/types";
 import { type } from "arktype";
 import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 
-import { OAuthTokenEndpointError, type BaseTokens } from "../index";
-import { OAUTH_PROVIDER_METADATA_KEY, writeOAuthTokens } from "./credentials";
-import type { OAuthLoginProviders } from "./registry";
+import { OAuthTokenEndpointError, type BaseTokens } from "../index.js";
+import {
+  OAUTH_PROVIDER_METADATA_KEY,
+  writeOAuthTokens,
+} from "./credentials.js";
+import type { OAuthLoginProviders } from "./registry.js";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_MARGIN_MS = 10 * 60 * 1000;
