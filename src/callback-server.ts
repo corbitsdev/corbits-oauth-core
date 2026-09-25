@@ -50,8 +50,7 @@ function isNonEmptyCode(value: string | null): value is string {
 }
 
 export type CallbackServer = {
-  /** The bound port; omitted by older callback server implementations. */
-  port?: number;
+  port: number;
   waitForCode: (signal: AbortSignal) => Promise<string>;
   close: () => void;
 };
