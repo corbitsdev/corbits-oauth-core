@@ -6,7 +6,7 @@ import {
   refreshCredential,
   type OAuthRefreshStore,
 } from "./refresh.js";
-import type { OAuthLoginProviders } from "./registry.js";
+import type { OAuthLoginProviders } from "../provider.js";
 
 const MINUTE = 60_000;
 

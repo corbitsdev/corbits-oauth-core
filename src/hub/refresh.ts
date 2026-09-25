@@ -9,7 +9,7 @@ import {
   OAUTH_PROVIDER_METADATA_KEY,
   writeOAuthTokens,
 } from "./credentials.js";
-import type { OAuthLoginProviders } from "./registry.js";
+import type { OAuthLoginProviders } from "../provider.js";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_MARGIN_MS = 10 * 60 * 1000;

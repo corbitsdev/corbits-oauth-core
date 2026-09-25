@@ -1,9 +1,10 @@
-import type { BaseTokens, OAuthClientConfig } from "../index.js";
+import type { OAuthClientConfig } from "./client.js";
+import type { BaseTokens } from "./tokens.js";
 
 /**
- * One provider a host offers for hub-hosted login. The host owns the
- * provider packages, so this library never depends on any of them: it only
- * sees an OAuth config and a code exchange.
+ * One OAuth provider a host offers for login. The host owns the provider
+ * packages, so this library never depends on any of them: it only sees an
+ * OAuth config and a code exchange.
  */
 export type OAuthLoginProvider = {
   /** Supplies the authorize URL and the fixed loopback redirect_uri. */
@@ -53,3 +54,10 @@ export function callbackTargetFor(config: OAuthClientConfig): {
   }
   return { host: url.hostname, port, path: url.pathname };
 }
+
+export const signedInHtml =
+  "<!doctype html><meta charset=utf-8><title>Signed in</title><p>Signed in. You can close this tab.";
+
+// `reason` echoes the redirect's `error` parameter, which anyone can set.
+export const signInFailedHtml = (reason: string): string =>
+  `<!doctype html><meta charset=utf-8><title>Sign-in failed</title><p>Sign-in failed: ${reason.replace(/[<&]/g, "")}`;

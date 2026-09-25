@@ -33,6 +33,8 @@ export {
   type StartOAuthLoginOptions,
 } from "./login.js";
 
+export { callbackTargetFor, type OAuthLoginProvider } from "./provider.js";
+
 export {
   createTokenSession,
   isTokenExpired,
