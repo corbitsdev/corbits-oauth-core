@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Provider-agnostic OAuth 2.0 authorization-code + PKCE login for desktop/CLI hosts.",
   "license": "LGPL-2.1-only",
-  "author": "Corbits",
+  "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
