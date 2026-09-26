@@ -20,6 +20,8 @@ id, or product name.
 - `src/session.ts` — `createTokenSession`, the refresh-ahead-of-expiry logic.
 - `src/browser.ts` — best-effort browser launch.
 - `src/login.ts` — `startOAuthLogin`, wiring the above into one flow.
+- `src/provider.ts` — `OAuthLoginProvider` and `loginWithProvider`, which
+  builds the login deps from a provider and saves the result.
 - `src/index.ts` — the only module consumers import from.
 - `src/*.test.ts` — tests next to the module they cover.
 
