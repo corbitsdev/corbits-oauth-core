@@ -3,20 +3,19 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "target": "ESNext",
-    "allowJs": true,
-    "resolveJsonModule": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "moduleDetection": "force",
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": true,
-    "module": "ESNext",
     "noEmit": true,
     "lib": ["ESNext"],
     "types": ["bun"]
   },
-  "include": ["src"]
+  "include": ["src", "e2e"]
 }
