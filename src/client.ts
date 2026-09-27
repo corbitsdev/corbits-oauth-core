@@ -148,7 +148,13 @@ async function postToken(
     }
     throw new OAuthTokenEndpointError(res.status, detail);
   }
-  const json = TokenResponse(await res.json());
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new OAuthTokenResponseSchemaError("invalid JSON");
+  }
+  const json = TokenResponse(payload);
   if (json instanceof type.errors)
     throw new OAuthTokenResponseSchemaError(json.summary);
   return json;

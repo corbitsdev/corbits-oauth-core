@@ -46,6 +46,15 @@ describe("OAuth client — hostile token responses", () => {
     ).rejects.toThrow(OAuthTokenResponseSchemaError);
   });
 
+  test("wraps a non-JSON 2xx body in the schema error", async () => {
+    const html: FetchLike = async () =>
+      new Response("<html>gateway</html>", { status: 200 });
+    html.preconnect = () => undefined;
+    await expect(
+      exchangeCode(config, "auth-code", "verifier", html),
+    ).rejects.toThrow(OAuthTokenResponseSchemaError);
+  });
+
   test("carries the prior refresh token forward when a refresh response omits one", () => {
     // Load-bearing: providers may or may not rotate refresh tokens on
     // refresh; dropping the prior one whenever a response omits it would
