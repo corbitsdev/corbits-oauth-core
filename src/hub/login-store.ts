@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 
+/** How long an expired login keeps answering "login expired" before it is dropped. */
+const EXPIRED_RETENTION_MS = 5 * 60 * 1000;
+
 /** What a caller polling a login sees. Tokens never appear here. */
 export type LoginState =
   | { readonly status: "pending" }
@@ -11,7 +14,7 @@ type LoginEntry = {
   /** Who started it; only that principal may poll or cancel it. */
   readonly tenantId: string;
   readonly principalId: string;
-  readonly expiresAt: number;
+  expiresAt: number;
   readonly abort: AbortController;
   readonly cancel: () => void;
   state: LoginState;
@@ -54,6 +57,8 @@ export function createLoginStore(): LoginStore {
         entry.cancel();
         entry.abort.abort();
         entry.state = { status: "failed", message: "login expired" };
+        entry.expiresAt = now + EXPIRED_RETENTION_MS;
+        continue;
       }
       logins.delete(id);
     }

@@ -31,9 +31,14 @@ describe("createLoginStore", () => {
     expect(store.read(id, alice)?.status).toBe("pending");
 
     const afterExpiry = pending.args.expiresAt + 1;
-    expect(store.read(id, alice, afterExpiry)).toBeUndefined();
+    expect(store.read(id, alice, afterExpiry)).toEqual({
+      status: "failed",
+      message: "login expired",
+    });
     expect(pending.wasCancelled()).toBe(true);
     expect(pending.abort.signal.aborted).toBe(true);
+
+    expect(store.read(id, alice, afterExpiry + 60 * 60_000)).toBeUndefined();
   });
 
   it("hides a login from every principal but the one that started it", () => {
