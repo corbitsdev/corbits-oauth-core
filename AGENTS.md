@@ -42,15 +42,3 @@ id, or product name.
 bun install
 bun run check   # typecheck + lint + format:check + test
 ```
-
-## Distribution
-
-The package ships compiled `dist/` on npm as `@corbits/oauth-core`:
-`exports` points at `dist/index.js` (types at `dist/index.d.ts`), plus
-`./hub` at `dist/hub/index.js`, built with `bun run build` (`tsc -p
-tsconfig.build.json`) via the `prepack` hook. Consumers install the
-published package (`bun add @corbits/oauth-core` or `npm install
-@corbits/oauth-core`) on Bun >= 1.2 or Node.js >= 24, both of which load
-the compiled output. A release is a version bump followed by
-`npm publish --access public`, with `dist/` built automatically by
-`prepack`.
