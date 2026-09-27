@@ -4,7 +4,6 @@ import {
   OAuthCallbackAddressUnavailableError,
   OAuthCallbackPortInUseError,
   startCallbackServer,
-  type CallbackServer,
 } from "./index.js";
 
 const config = (port: number, host?: string) => ({
@@ -14,11 +13,6 @@ const config = (port: number, host?: string) => ({
   doneHtml: "<html>done</html>",
   failedHtml: (reason: string) => `<html>failed: ${reason}</html>`,
 });
-
-const getPort = (server: CallbackServer): number => {
-  if (server.port === undefined) throw new Error("test server has no port");
-  return server.port;
-};
 
 describe("Callback server startCallbackServer — state validation", () => {
   test.each([undefined, "127.0.0.1", "localhost", "::1"])(
@@ -40,7 +34,7 @@ describe("Callback server startCallbackServer — state validation", () => {
     try {
       const waiting = server.waitForCode(new AbortController().signal);
       const response = await fetch(
-        `http://localhost:${getPort(server)}/callback?code=some-code&state=expected-state`,
+        `http://localhost:${server.port}/callback?code=some-code&state=expected-state`,
       );
       expect(response.status).toBe(200);
       await expect(waiting).resolves.toBe("some-code");
@@ -66,13 +60,13 @@ describe("Callback server startCallbackServer — state validation", () => {
     try {
       const error = await startCallbackServer(
         "expected-state",
-        config(getPort(first), "127.0.0.1"),
+        config(first.port, "127.0.0.1"),
       ).then(
         () => undefined,
         (reason: unknown) => reason,
       );
       expect(error).toBeInstanceOf(OAuthCallbackPortInUseError);
-      expect(error).toMatchObject({ port: getPort(first), host: "127.0.0.1" });
+      expect(error).toMatchObject({ port: first.port, host: "127.0.0.1" });
       expect(error).toHaveProperty(
         "message",
         expect.stringContaining("127.0.0.1"),
@@ -105,7 +99,7 @@ describe("Callback server startCallbackServer — state validation", () => {
     try {
       const waiting = server.waitForCode(new AbortController().signal);
       const resPromise = fetch(
-        `http://127.0.0.1:${getPort(server)}/callback?code=some-code&state=wrong-state`,
+        `http://127.0.0.1:${server.port}/callback?code=some-code&state=wrong-state`,
       );
       await expect(waiting).rejects.toThrow(/state did not match/);
       expect((await resPromise).status).toBe(400);

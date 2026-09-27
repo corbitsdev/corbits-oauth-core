@@ -8,6 +8,7 @@ import {
 
 function fakeCallbackServer(code: string): CallbackServer & { closed: number } {
   const server = {
+    port: 0,
     closed: 0,
     waitForCode: async () => code,
     close: () => {
