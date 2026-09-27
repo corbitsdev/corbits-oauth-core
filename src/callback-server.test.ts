@@ -91,18 +91,22 @@ describe("Callback server startCallbackServer — state validation", () => {
     expect(error.message).toContain("1234");
   });
 
-  test("rejects a redirect whose state does not match, without trusting the code", async () => {
+  test("refuses a redirect whose state does not match and keeps waiting", async () => {
     // Load-bearing: the state check is what stops a redirect from an
     // unrelated flow (or an attacker's crafted link) from being accepted as
-    // this login's authorization code.
+    // this login's authorization code, or from killing the pending login.
     const server = await startCallbackServer("expected-state", config(0));
     try {
       const waiting = server.waitForCode(new AbortController().signal);
-      const resPromise = fetch(
-        `http://127.0.0.1:${server.port}/callback?code=some-code&state=wrong-state`,
+      const forged = await fetch(
+        `http://127.0.0.1:${server.port}/callback?code=forged&state=wrong-state`,
       );
-      await expect(waiting).rejects.toThrow(/state did not match/);
-      expect((await resPromise).status).toBe(400);
+      expect(forged.status).toBe(400);
+      const real = await fetch(
+        `http://127.0.0.1:${server.port}/callback?code=real&state=expected-state`,
+      );
+      expect(real.status).toBe(200);
+      expect(await waiting).toBe("real");
     } finally {
       server.close();
     }

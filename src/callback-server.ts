@@ -157,11 +157,7 @@ export async function startCallbackServer(
       res.statusCode = 400;
       res.setHeader("content-type", "text/html; charset=utf-8");
       res.end(config.failedHtml("state mismatch"));
-      finish({
-        error: new OAuthCallbackError(
-          "Authorization state did not match; possible CSRF - login aborted.",
-        ),
-      });
+      // Not this login's redirect: refuse it and keep waiting for the real one.
       return;
     }
 
