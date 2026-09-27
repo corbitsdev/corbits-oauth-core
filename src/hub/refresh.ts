@@ -42,7 +42,9 @@ export type OAuthRefreshStore = {
   /**
    * Take the row lock on one candidate and hand it to `refresh`. Returns
    * false when another hub holds the row or `refresh` declines it; true when
-   * new material was written.
+   * new material was written. When the provider rejects the refresh token
+   * the row is marked `error`, so it is no longer due, and the rejection is
+   * rethrown.
    */
   claim(
     credentialId: string,
@@ -75,11 +77,22 @@ function dueAt(expiresAt: Date | null, deadline: number): boolean {
   return expiresAt !== null && expiresAt.getTime() <= deadline;
 }
 
-// A rejected token-endpoint call (invalid_grant and friends) means the
-// refresh token itself is dead — only a fresh sign-in fixes it. Anything
-// else (network, decrypt, our own bugs) is retried on the next pass.
+// Only `invalid_grant` (RFC 6749 §5.2) means the refresh token itself is
+// dead and a fresh sign-in is the fix. Everything else — 429, 408, a 401
+// `invalid_client`, 5xx, network, decrypt — is retried on the next pass.
 function isReauthError(error: unknown): boolean {
-  return error instanceof OAuthTokenEndpointError;
+  if (!(error instanceof OAuthTokenEndpointError)) return false;
+  try {
+    const body: unknown = JSON.parse(error.detail);
+    return (
+      typeof body === "object" &&
+      body !== null &&
+      "error" in body &&
+      body.error === "invalid_grant"
+    );
+  } catch {
+    return false;
+  }
 }
 
 export type RefreshCredentialResult =
@@ -132,6 +145,15 @@ export async function refreshCredential(
     }
     return { ok: true };
   } catch (error) {
+    if (isReauthError(error)) {
+      // Reported once: the row is now `error`, so listDue skips it.
+      opts.onError?.(
+        new Error(
+          `credential ${due.id} refresh token rejected (invalid_grant); marked error until a new sign-in`,
+        ),
+        { provider: due.provider, credentialId: due.id },
+      );
+    }
     return {
       ok: false,
       reason: isReauthError(error) ? "reauth" : "error",
@@ -173,7 +195,7 @@ export function createOAuthRefreshStore(opts: {
         );
     },
     async claim(credentialId, refresh) {
-      return opts.db.transaction(async (tx) => {
+      const outcome = await opts.db.transaction(async (tx) => {
         const [row] = await tx
           .select()
           .from(credential)
@@ -192,13 +214,24 @@ export function createOAuthRefreshStore(opts: {
           row.refreshSecret,
           credentialAad(row.id, "refreshSecret"),
         );
-        const result = await refresh({
-          id: row.id,
-          tenantId: row.tenantId,
-          expiresAt: row.expiresAt,
-          refreshSecret,
-          metadata,
-        });
+        let result;
+        try {
+          result = await refresh({
+            id: row.id,
+            tenantId: row.tenantId,
+            expiresAt: row.expiresAt,
+            refreshSecret,
+            metadata,
+          });
+        } catch (error) {
+          if (!isReauthError(error)) throw error;
+          // Committed, not rolled back: the row needs a sign-in either way.
+          await tx
+            .update(credential)
+            .set({ status: "error", updatedAt: new Date() })
+            .where(eq(credential.id, credentialId));
+          return { rejected: error };
+        }
         if (result === null) return false;
 
         await writeOAuthTokens({
@@ -210,6 +243,8 @@ export function createOAuthRefreshStore(opts: {
         });
         return true;
       });
+      if (typeof outcome === "object") throw outcome.rejected;
+      return outcome;
     },
   };
 }
@@ -253,9 +288,9 @@ export function createRefreshTicker(
       );
       for (const candidate of due) {
         const result = await refreshCredential(store, opts, candidate);
-        // A "reauth" outcome (no refresh capability, or the provider
-        // rejected the refresh token) is expected and silent — the person
-        // signs in again. Anything else is worth surfacing.
+        // A "reauth" outcome is not re-reported here: a provider without
+        // refresh is expected, and a rejected token was reported once by
+        // refreshCredential. Anything else is retried next tick.
         if (!result.ok && result.reason === "error") {
           opts.onError?.(new Error(result.message), {
             provider: candidate.provider,
