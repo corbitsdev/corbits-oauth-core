@@ -121,7 +121,7 @@ export async function refreshCredential(
       // what the first exchange established (an account id, say).
       return {
         tokens,
-        metadata: { ...row.metadata, ...(provider.metadata?.(tokens) ?? {}) },
+        metadata: { ...row.metadata, ...provider.metadata?.(tokens) },
       };
     });
     if (written) {
