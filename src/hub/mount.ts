@@ -9,7 +9,11 @@ import {
   startCallbackServer,
   startOAuthLogin,
 } from "../index.js";
-import { persistOAuthCredential } from "./credentials.js";
+import {
+  checkOAuthCredentialTarget,
+  OAuthCredentialTargetRejectedError,
+  persistOAuthCredential,
+} from "./credentials.js";
 import { createLoginStore, type LoginState } from "./login-store.js";
 import {
   callbackTargetFor,
@@ -76,6 +80,15 @@ export function mountOAuthLogin(
     }
 
     const { tenantId, principalId } = owner(c);
+    const rejected = await checkOAuthCredentialTarget(opts.db, {
+      tenantId,
+      principalId,
+      providerId: body.providerId,
+      name: body.credentialName,
+    });
+    if (rejected !== null) {
+      return c.json({ error: rejected.error }, rejected.status);
+    }
     const target = callbackTargetFor(provider.oauthConfig);
     const abort = new AbortController();
 
@@ -139,7 +152,10 @@ export function mountOAuthLogin(
           opts.onError?.(cause, { provider: body.provider });
           logins.settle(loginId, {
             status: "failed",
-            message: "the tokens could not be stored",
+            message:
+              cause instanceof OAuthCredentialTargetRejectedError
+                ? cause.message
+                : "the tokens could not be stored",
           });
         }
       },

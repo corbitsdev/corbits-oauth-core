@@ -41,4 +41,5 @@ id, or product name.
 ```sh
 bun install
 bun run check   # typecheck + lint + format:check + test
+bun run test:e2e # Postgres tests; DATABASE_URL, default localhost:5432
 ```

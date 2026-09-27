@@ -1,8 +1,12 @@
-import type { DB } from "@intx/db";
-import { credential, grant as grantTable } from "@intx/db/schema";
+import { getAncestorChain, type DB } from "@intx/db";
+import {
+  credential,
+  grant as grantTable,
+  provider as providerTable,
+} from "@intx/db/schema";
 import { generateId } from "@intx/hub-common";
 import { credentialAad, type CredentialCipher } from "@intx/types";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import type { BaseTokens } from "../index.js";
 
@@ -78,21 +82,95 @@ export type PersistOAuthCredentialOpts = {
   readonly metadata: Record<string, string>;
 };
 
+export type OAuthCredentialTarget = {
+  readonly tenantId: string;
+  readonly principalId: string;
+  readonly providerId: string;
+  readonly name: string;
+};
+
+/** Why a login may not write to its target, as the stock route would answer. */
+export type OAuthCredentialTargetError =
+  | { readonly status: 404; readonly error: "Provider not found" }
+  | {
+      readonly status: 409;
+      readonly error: "Credential name already exists in this tenant";
+    };
+
+/** Thrown by `persistOAuthCredential` when its target is refused. */
+export class OAuthCredentialTargetRejectedError extends Error {
+  constructor(readonly reason: OAuthCredentialTargetError) {
+    super(reason.error);
+    this.name = "OAuthCredentialTargetRejectedError";
+  }
+}
+
+async function findByName(
+  db: DB["db"],
+  target: OAuthCredentialTarget,
+): Promise<typeof credential.$inferSelect | undefined> {
+  return db.query.credential.findFirst({
+    where: and(
+      eq(credential.tenantId, target.tenantId),
+      eq(credential.name, target.name),
+    ),
+  });
+}
+
+/** Only the caller's own OAuth login may be replaced in place. */
+function isOwnOAuthLogin(
+  row: typeof credential.$inferSelect,
+  principalId: string,
+): boolean {
+  return row.type === "oauth_token" && row.principalId === principalId;
+}
+
+/**
+ * The stock `POST /credentials` rules, applied to a login's target: the
+ * provider must sit in the caller's tenant ancestor chain, and the name may
+ * only collide with the caller's own `oauth_token` credential.
+ */
+export async function checkOAuthCredentialTarget(
+  db: DB["db"],
+  target: OAuthCredentialTarget,
+): Promise<OAuthCredentialTargetError | null> {
+  const providerRow = await db.query.provider.findFirst({
+    where: eq(providerTable.id, target.providerId),
+  });
+  if (providerRow === undefined) {
+    return { status: 404, error: "Provider not found" };
+  }
+  const chain = await getAncestorChain(db, target.tenantId);
+  if (!chain.includes(providerRow.tenantId)) {
+    return { status: 404, error: "Provider not found" };
+  }
+  const existing = await findByName(db, target);
+  if (
+    existing !== undefined &&
+    !isOwnOAuthLogin(existing, target.principalId)
+  ) {
+    return {
+      status: 409,
+      error: "Credential name already exists in this tenant",
+    };
+  }
+  return null;
+}
+
 /**
  * Store freshly-minted OAuth tokens as a stock Interchange `oauth_token`
  * credential — the same row shape, AAD-bound encryption and creator grant
  * the platform's own `POST /credentials` writes, so nothing downstream can
  * tell a login-minted credential from a hand-entered one. Re-logging in
- * under the same name replaces the secrets in place rather than colliding
- * on the per-tenant unique name.
+ * under the same name replaces the caller's own secrets in place; any other
+ * rejected target throws `OAuthCredentialTargetRejectedError`.
  */
 export async function persistOAuthCredential(
   opts: PersistOAuthCredentialOpts,
 ): Promise<string> {
-  const existing = await opts.db.query.credential.findFirst({
-    where: (row, { and, eq }) =>
-      and(eq(row.tenantId, opts.tenantId), eq(row.name, opts.name)),
-  });
+  const rejected = await checkOAuthCredentialTarget(opts.db, opts);
+  if (rejected !== null) throw new OAuthCredentialTargetRejectedError(rejected);
+  const existing = await findByName(opts.db, opts);
 
   const now = new Date();
   const credentialId = existing?.id ?? generateId("credential");
