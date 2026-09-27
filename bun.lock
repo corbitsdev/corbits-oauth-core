@@ -9,7 +9,7 @@
         "@intx/hub-api": "^0.4.0",
         "@intx/hub-common": "^0.4.0",
         "@intx/types": "^0.4.0",
-        "arktype": "2.2.3",
+        "arktype": "^2.2.3",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.11.9",
       },
