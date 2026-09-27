@@ -193,7 +193,9 @@ describe("refreshCredential", () => {
       store,
       {
         providers: providers(() =>
-          Promise.reject(new OAuthTokenEndpointError(400, "invalid_grant")),
+          Promise.reject(
+            new OAuthTokenEndpointError(400, `{"error":"invalid_grant"}`),
+          ),
         ),
         marginMs: 10 * MINUTE,
       },
@@ -202,7 +204,9 @@ describe("refreshCredential", () => {
     expect(result).toEqual({
       ok: false,
       reason: "reauth",
-      message: String(new OAuthTokenEndpointError(400, "invalid_grant")),
+      message: String(
+        new OAuthTokenEndpointError(400, `{"error":"invalid_grant"}`),
+      ),
     });
     expect(written).toEqual([]);
   });
