@@ -46,6 +46,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun test src --pass-with-no-tests",
+    "test:e2e": "bun test ./e2e",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "dependencies": {

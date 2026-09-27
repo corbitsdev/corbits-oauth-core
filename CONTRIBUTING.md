@@ -7,7 +7,7 @@ bun install
 bun run check
 ```
 
-`bun run check` runs typecheck, lint, format check and unit tests. `bun run format` rewrites the tree.
+`bun run check` runs typecheck, lint, format check and unit tests. `bun run format` rewrites the tree. `bun run test:e2e` runs the Postgres tests against `DATABASE_URL` (default `postgres://postgres:postgres@localhost:5432/postgres`).
 
 Contributors sign the [CLA](CLA.md) on their first PR; the CLA bot explains how.
 
