@@ -240,8 +240,6 @@ that same login loop in-process behind `mountOAuthLogin` and writes a stock
 refreshes them under a row lock (`FOR UPDATE SKIP LOCKED`), so two hubs
 ticking at once never both refresh the same credential.
 
-`PRODUCT.md`, `ARCHITECTURE.md`, and `IMPLEMENTATION.md` describe the PKCE loopback product, structure, and wire format.
-
 ## Development
 
 ```sh
