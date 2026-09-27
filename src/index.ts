@@ -34,6 +34,13 @@ export {
 } from "./login.js";
 
 export {
+  callbackTargetFor,
+  loginWithProvider,
+  type LoginWithProviderOptions,
+  type OAuthLoginProvider,
+} from "./provider.js";
+
+export {
   createTokenSession,
   isTokenExpired,
   OAuthProfileNotFoundError,

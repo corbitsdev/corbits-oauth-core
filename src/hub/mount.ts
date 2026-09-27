@@ -11,7 +11,12 @@ import {
 } from "../index.js";
 import { persistOAuthCredential } from "./credentials.js";
 import { createLoginStore, type LoginState } from "./login-store.js";
-import { callbackTargetFor, type OAuthLoginProviders } from "./registry.js";
+import {
+  callbackTargetFor,
+  signedInHtml,
+  signInFailedHtml,
+  type OAuthLoginProviders,
+} from "../provider.js";
 
 /** An abandoned login holds a fixed loopback port, so it is not held long. */
 const DEFAULT_LOGIN_TTL_MS = 5 * 60 * 1000;
@@ -22,12 +27,6 @@ const StartLogin = type({
   providerId: "string",
   credentialName: "string",
 });
-
-const DONE_HTML =
-  "<!doctype html><meta charset=utf-8><title>Signed in</title><p>Signed in — you can close this tab and return to your workbench.";
-
-const failedHtml = (reason: string): string =>
-  `<!doctype html><meta charset=utf-8><title>Sign-in failed</title><p>Sign-in failed: ${reason.replace(/[<&]/g, "")}`;
 
 export type MountOAuthLoginOpts = {
   readonly db: DB["db"];
@@ -90,8 +89,8 @@ export function mountOAuthLogin(
               port: target.port,
               host: target.host,
               path: target.path,
-              doneHtml: DONE_HTML,
-              failedHtml,
+              doneHtml: signedInHtml,
+              failedHtml: signInFailedHtml,
             }),
           buildAuthorizeUrl: (pkce, state) =>
             buildAuthorizeUrl(provider.oauthConfig, pkce, state),

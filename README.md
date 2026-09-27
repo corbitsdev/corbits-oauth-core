@@ -116,9 +116,9 @@ import {
   type BaseTokens,
   type CallbackServer,
   type OAuthLoginDeps,
+  type OAuthLoginProvider,
   type TokenSessionDeps,
 } from "@corbits/oauth-core";
-import type { OAuthLoginProvider } from "@corbits/oauth-core/hub";
 
 // The host's own callback page, served on the provider's fixed redirect_uri.
 function startBrandedCallbackServer(
