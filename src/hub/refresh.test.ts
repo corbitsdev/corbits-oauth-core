@@ -181,6 +181,47 @@ describe("createRefreshTicker", () => {
   });
 });
 
+describe("a credential of an unregistered provider", () => {
+  it("refreshes from the client id and token URL stored on its row", async () => {
+    const { store, written } = fakeStore({
+      id: "cred_1",
+      tenantId: "tenant_1",
+      provider: "https://mcp.example.com",
+      expiresAt: new Date(Date.now() + MINUTE),
+      metadata: {
+        oauthProvider: "https://mcp.example.com",
+        oauthClientId: "dyn-client",
+        oauthTokenUrl: "https://auth.example.com/token",
+      },
+    });
+    const requests: { url: string; body: string }[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        requests.push({ url: String(input), body: String(init?.body) });
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ access_token: "fresh", expires_in: 3600 }),
+          ),
+        );
+      },
+      { preconnect: () => undefined },
+    );
+    try {
+      await tickOnce(store, { providers: {}, marginMs: 10 * MINUTE });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe("https://auth.example.com/token");
+    expect(requests[0]?.body).toContain("client_id=dyn-client");
+    expect(requests[0]?.body).toContain("refresh_token=refresh-token");
+    // The response omitted a refresh token, so the stored one carries forward.
+    expect(written[0]?.tokens.refresh).toBe("refresh-token");
+    expect(written[0]?.tokens.access).toBe("fresh");
+  });
+});
+
 describe("refreshCredential", () => {
   it("reports reauth when the provider rejects the refresh token", async () => {
     const { store, written } = fakeStore({

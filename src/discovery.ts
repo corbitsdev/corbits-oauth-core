@@ -153,6 +153,38 @@ function wellKnownUrl(raw: string, suffix: string): string {
   return parsed.toString();
 }
 
+// RFC 9728 §5.1: a 401 challenge may name its protected-resource metadata
+// document directly. The probe is best-effort; any failure falls back to the
+// well-known URL.
+async function challengedMetadataUrl(
+  resourceUrl: string,
+  fetchImpl: FetchLike,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  let res: Response;
+  try {
+    res = await fetchImpl(resourceUrl, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    return undefined;
+  }
+  if (res.status !== 401) return undefined;
+  const match = /resource_metadata="?([^",\s]+)"?/i.exec(
+    res.headers.get("www-authenticate") ?? "",
+  );
+  return match?.[1];
+}
+
+// A server may describe the whole origin (`https://host`) while the MCP
+// endpoint sits at a path under it (`https://host/mcp`).
+function resourceMatches(advertised: string, requested: string): boolean {
+  if (advertised === requested) return true;
+  const origin = new URL(requested).origin;
+  return advertised === origin || advertised === `${origin}/`;
+}
+
 async function getJson(
   url: string,
   fetchImpl: FetchLike,
@@ -238,10 +270,9 @@ export async function discoverMcpLoginEntry(
 
   let issuer: string | undefined;
   let resourceScopesSupported: readonly string[] | undefined;
-  const resourceMetadataUrl = wellKnownUrl(
-    resourceUrl,
-    "oauth-protected-resource",
-  );
+  const resourceMetadataUrl =
+    (await challengedMetadataUrl(resourceUrl, fetchImpl, timeoutMs)) ??
+    wellKnownUrl(resourceUrl, "oauth-protected-resource");
   const resourceRes = await getJson(resourceMetadataUrl, fetchImpl, timeoutMs);
   if (resourceRes.ok) {
     const payload = ProtectedResourceMetadata(
@@ -251,7 +282,7 @@ export async function discoverMcpLoginEntry(
       throw new OAuthDiscoveryError(
         `protected-resource metadata at ${resourceMetadataUrl} is malformed: ${payload.summary}`,
       );
-    if (payload.resource !== resourceUrl)
+    if (!resourceMatches(payload.resource, resourceUrl))
       throw new OAuthDiscoveryError(
         `protected-resource metadata resource mismatch: expected ${resourceUrl}, got ${payload.resource}.`,
       );

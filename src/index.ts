@@ -22,6 +22,7 @@ export {
   OAuthMissingRefreshTokenError,
   type FetchLike,
   type OAuthClientConfig,
+  type TokenEndpointConfig,
   type TokenResponse,
 } from "./client.js";
 

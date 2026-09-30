@@ -18,6 +18,15 @@ import type { BaseTokens } from "../index.js";
  */
 export const OAUTH_PROVIDER_METADATA_KEY = "oauthProvider";
 
+/**
+ * Credential-metadata keys of a login whose client was registered
+ * dynamically: the client id and token URL a refresh needs, which no static
+ * registry entry supplies. The refresher renews a credential carrying both
+ * even when its provider key is not registered.
+ */
+export const OAUTH_CLIENT_ID_METADATA_KEY = "oauthClientId";
+export const OAUTH_TOKEN_URL_METADATA_KEY = "oauthTokenUrl";
+
 /** Everything the token writes below need — a `db` or an open transaction. */
 export type OAuthCredentialWriter = Pick<DB["db"], "update">;
 

@@ -4,7 +4,9 @@ export { mountOAuthLogin, type MountOAuthLoginOpts } from "./mount.js";
 export type { OAuthLoginProviders } from "../provider.js";
 export {
   persistOAuthCredential,
+  OAUTH_CLIENT_ID_METADATA_KEY,
   OAUTH_PROVIDER_METADATA_KEY,
+  OAUTH_TOKEN_URL_METADATA_KEY,
 } from "./credentials.js";
 export {
   createOAuthRefreshStore,
