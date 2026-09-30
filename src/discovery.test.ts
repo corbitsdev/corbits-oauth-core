@@ -155,6 +155,78 @@ describe("MCP OAuth discovery", () => {
     ).rejects.toThrow(OAuthDiscoveryError);
   });
 
+  test("accepts protected-resource metadata that names the origin of the requested URL", async () => {
+    // Load-bearing: real servers describe the origin at the root document
+    // while the MCP endpoint sits under a path.
+    const { fetchImpl } = fakeFetch({
+      "https://mcp.example.com/.well-known/oauth-protected-resource/mcp": {
+        status: 200,
+        body: {
+          ...exampleProtectedResource,
+          resource: "https://mcp.example.com",
+        },
+      },
+      "https://mcp.example.com/.well-known/oauth-authorization-server": {
+        status: 200,
+        body: exampleAsMetadata,
+      },
+    });
+    const entry = await discoverMcpLoginEntry({
+      resourceUrl: "https://mcp.example.com/mcp",
+      fetchImpl,
+    });
+    expect(entry.resourceUrl).toBe("https://mcp.example.com/mcp");
+  });
+
+  test("follows the resource_metadata URL of a 401 challenge", async () => {
+    const metadataUrl = "https://mcp.example.com/custom/prm.json";
+    const requests: string[] = [];
+    const routes: Record<string, { status: number; body: unknown }> = {
+      [metadataUrl]: {
+        status: 200,
+        body: {
+          resource: resourceUrl,
+          authorization_servers: ["https://auth.example.com"],
+        },
+      },
+      "https://auth.example.com/.well-known/oauth-authorization-server": {
+        status: 200,
+        body: asMetadata,
+      },
+    };
+    const fetchImpl: FetchLike = Object.assign(
+      (input: Parameters<FetchLike>[0]) => {
+        const url = String(input);
+        requests.push(url);
+        if (url === resourceUrl)
+          return Promise.resolve(
+            new Response("", {
+              status: 401,
+              headers: {
+                "www-authenticate": `Bearer resource_metadata="${metadataUrl}"`,
+              },
+            }),
+          );
+        const route = routes[url];
+        return Promise.resolve(
+          route === undefined
+            ? new Response("not found", { status: 404 })
+            : new Response(JSON.stringify(route.body), {
+                status: route.status,
+              }),
+        );
+      },
+      { preconnect: () => undefined },
+    );
+    const entry = await discoverMcpLoginEntry({ resourceUrl, fetchImpl });
+    expect(entry.authorizationServer.tokenEndpoint).toBe(
+      "https://auth.example.com/token",
+    );
+    expect(requests).not.toContain(
+      "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+    );
+  });
+
   test("fails when neither metadata document exists", async () => {
     const { fetchImpl } = fakeFetch({});
     await expect(

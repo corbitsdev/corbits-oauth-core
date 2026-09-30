@@ -17,6 +17,13 @@ export type OAuthClientConfig = {
   tokenTimeoutMs: number;
 };
 
+// What a token request needs: a refresh does not repeat the authorize-time
+// fields, so a host holding only a stored client id and token URL can refresh.
+export type TokenEndpointConfig = Pick<
+  OAuthClientConfig,
+  "clientId" | "tokenUrl" | "tokenTimeoutMs"
+>;
+
 /**
  * Build the authorization URL the user opens to grant access. The challenge
  * binds this request to the PKCE verifier held locally; `state` is the CSRF
@@ -123,7 +130,7 @@ export type FetchLike = typeof fetch;
 // to the real `fetch`; an internal helper reaching for the global itself
 // would make that default impossible to override consistently from one place.
 async function postToken(
-  config: OAuthClientConfig,
+  config: TokenEndpointConfig,
   body: URLSearchParams,
   fetchImpl: FetchLike,
 ): Promise<TokenResponse> {
@@ -185,7 +192,7 @@ export async function exchangeCode(
  * callers map it and carry the prior refresh token forward when omitted.
  */
 export async function refreshTokenRequest(
-  config: OAuthClientConfig,
+  config: TokenEndpointConfig,
   refreshToken: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<TokenResponse> {

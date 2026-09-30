@@ -2,17 +2,25 @@ import type { DB } from "@intx/db";
 import { credential } from "@intx/db/schema";
 import { credentialAad, type CredentialCipher } from "@intx/types";
 import { type } from "arktype";
-import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 
-import { OAuthTokenEndpointError, type BaseTokens } from "../index.js";
 import {
+  baseTokensFromResponse,
+  OAuthTokenEndpointError,
+  refreshTokenRequest,
+  type BaseTokens,
+} from "../index.js";
+import {
+  OAUTH_CLIENT_ID_METADATA_KEY,
   OAUTH_PROVIDER_METADATA_KEY,
+  OAUTH_TOKEN_URL_METADATA_KEY,
   writeOAuthTokens,
 } from "./credentials.js";
 import type { OAuthLoginProviders } from "../provider.js";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_MARGIN_MS = 10 * 60 * 1000;
+const REGISTERED_CLIENT_TOKEN_TIMEOUT_MS = 30_000;
 
 /** Credential metadata is host-written JSON, so it is parsed, never asserted. */
 const CredentialMetadata = type("Record<string, string>");
@@ -34,7 +42,10 @@ export type DueCredential = {
 };
 
 export type OAuthRefreshStore = {
-  /** Candidates: an `oauth_token` row of a registered provider, due by `dueBefore`. */
+  /**
+   * Candidates: an `oauth_token` row due by `dueBefore` that either names a
+   * registered provider or carries its own client id and token URL.
+   */
   listDue(
     dueBefore: Date,
     providers: readonly string[],
@@ -72,6 +83,31 @@ export type OAuthTokenRefresherOpts = {
     context: { provider?: string; credentialId?: string },
   ) => void;
 };
+
+/**
+ * A login whose client was registered dynamically stores what a refresh
+ * needs on the row, so no registry entry is required to renew it.
+ */
+function registeredClientRefresh(
+  metadata: Record<string, string>,
+): ((refreshSecret: string, now: number) => Promise<BaseTokens>) | undefined {
+  const clientId = metadata[OAUTH_CLIENT_ID_METADATA_KEY];
+  const tokenUrl = metadata[OAUTH_TOKEN_URL_METADATA_KEY];
+  if (clientId === undefined || tokenUrl === undefined) return undefined;
+  return async (refreshSecret, now) =>
+    baseTokensFromResponse(
+      await refreshTokenRequest(
+        {
+          clientId,
+          tokenUrl,
+          tokenTimeoutMs: REGISTERED_CLIENT_TOKEN_TIMEOUT_MS,
+        },
+        refreshSecret,
+      ),
+      now,
+      refreshSecret,
+    );
+}
 
 function dueAt(expiresAt: Date | null, deadline: number): boolean {
   return expiresAt !== null && expiresAt.getTime() <= deadline;
@@ -116,9 +152,9 @@ export async function refreshCredential(
   const marginMs = opts.marginMs ?? DEFAULT_MARGIN_MS;
   const deadline = Date.now() + marginMs;
   const provider = opts.providers[due.provider];
-  const refresh = provider?.refresh;
-  // A provider that cannot refresh leaves its credentials to a sign-in.
-  if (provider === undefined || refresh === undefined) {
+  // A registered provider that cannot refresh leaves its credentials to a
+  // sign-in. An unregistered key falls through to the row's own client.
+  if (provider !== undefined && provider.refresh === undefined) {
     return {
       ok: false,
       reason: "reauth",
@@ -129,12 +165,15 @@ export async function refreshCredential(
     const written = await store.claim(due.id, async (row) => {
       // Re-checked under the lock: another hub may have renewed it since.
       if (!dueAt(row.expiresAt, deadline)) return null;
+      const refresh =
+        provider?.refresh ?? registeredClientRefresh(row.metadata);
+      if (refresh === undefined) return null;
       const tokens = await refresh(row.refreshSecret, Date.now());
       // The prior metadata is carried forward: a refresh response may omit
       // what the first exchange established (an account id, say).
       return {
         tokens,
-        metadata: { ...row.metadata, ...provider.metadata?.(tokens) },
+        metadata: { ...row.metadata, ...provider?.metadata?.(tokens) },
       };
     });
     if (written) {
@@ -173,9 +212,10 @@ export function createOAuthRefreshStore(opts: {
   readonly cipher: CredentialCipher;
 }): OAuthRefreshStore {
   const providerKey = sql<string>`${credential.metadata} ->> ${OAUTH_PROVIDER_METADATA_KEY}`;
+  const clientIdKey = sql<string>`${credential.metadata} ->> ${OAUTH_CLIENT_ID_METADATA_KEY}`;
+  const tokenUrlKey = sql<string>`${credential.metadata} ->> ${OAUTH_TOKEN_URL_METADATA_KEY}`;
   return {
     async listDue(dueBefore, providers) {
-      if (providers.length === 0) return [];
       return opts.db
         .select({
           id: credential.id,
@@ -190,7 +230,12 @@ export function createOAuthRefreshStore(opts: {
             isNotNull(credential.refreshSecret),
             isNotNull(credential.expiresAt),
             lte(credential.expiresAt, dueBefore),
-            inArray(providerKey, [...providers]),
+            or(
+              providers.length === 0
+                ? undefined
+                : inArray(providerKey, [...providers]),
+              and(isNotNull(clientIdKey), isNotNull(tokenUrlKey)),
+            ),
           ),
         );
     },
