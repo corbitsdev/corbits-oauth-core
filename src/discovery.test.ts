@@ -26,16 +26,16 @@ const asMetadata = {
 // Real metadata (checked 2026-09-22) from two live MCP servers, used to keep
 // the negotiation logic honest against shapes actual authorization servers
 // send. No provider-specific behavior lives in src — these are fixtures only.
-const linearProtectedResource = {
-  resource: "https://mcp.linear.app/mcp",
-  authorization_servers: ["https://mcp.linear.app"],
+const exampleProtectedResource = {
+  resource: "https://mcp.example.com/mcp",
+  authorization_servers: ["https://mcp.example.com"],
   scopes_supported: ["read", "write"],
 };
-const linearAsMetadata = {
-  issuer: "https://mcp.linear.app",
-  authorization_endpoint: "https://mcp.linear.app/authorize",
-  token_endpoint: "https://mcp.linear.app/token",
-  registration_endpoint: "https://mcp.linear.app/register",
+const exampleAsMetadata = {
+  issuer: "https://mcp.example.com",
+  authorization_endpoint: "https://mcp.example.com/authorize",
+  token_endpoint: "https://mcp.example.com/token",
+  registration_endpoint: "https://mcp.example.com/register",
   grant_types_supported: [
     "authorization_code",
     "refresh_token",
@@ -50,16 +50,16 @@ const linearAsMetadata = {
   code_challenge_methods_supported: ["S256"],
 };
 
-const granolaProtectedResource = {
-  resource: "https://mcp.granola.ai/mcp",
-  authorization_servers: ["https://mcp-auth.granola.ai"],
+const offlineProtectedResource = {
+  resource: "https://mcp.example.org/mcp",
+  authorization_servers: ["https://auth.example.org"],
   scopes_supported: ["mcp"],
 };
-const granolaAsMetadata = {
-  issuer: "https://mcp-auth.granola.ai",
-  authorization_endpoint: "https://mcp-auth.granola.ai/oauth2/authorize",
-  token_endpoint: "https://mcp-auth.granola.ai/oauth2/token",
-  registration_endpoint: "https://mcp-auth.granola.ai/oauth2/register",
+const offlineAsMetadata = {
+  issuer: "https://auth.example.org",
+  authorization_endpoint: "https://auth.example.org/oauth2/authorize",
+  token_endpoint: "https://auth.example.org/oauth2/token",
+  registration_endpoint: "https://auth.example.org/oauth2/register",
   grant_types_supported: [
     "authorization_code",
     "refresh_token",
@@ -215,28 +215,28 @@ describe("MCP OAuth discovery", () => {
 
   test("carries the AS's negotiation metadata and the resource's own scopes into the entry", async () => {
     const { fetchImpl } = fakeFetch({
-      "https://mcp.linear.app/.well-known/oauth-protected-resource/mcp": {
+      "https://mcp.example.com/.well-known/oauth-protected-resource/mcp": {
         status: 200,
-        body: linearProtectedResource,
+        body: exampleProtectedResource,
       },
-      "https://mcp.linear.app/.well-known/oauth-authorization-server": {
+      "https://mcp.example.com/.well-known/oauth-authorization-server": {
         status: 200,
-        body: linearAsMetadata,
+        body: exampleAsMetadata,
       },
     });
     const entry = await discoverMcpLoginEntry({
-      resourceUrl: "https://mcp.linear.app/mcp",
+      resourceUrl: "https://mcp.example.com/mcp",
       fetchImpl,
     });
     expect(entry.resourceScopesSupported).toEqual(["read", "write"]);
     expect(entry.authorizationServer.grantTypesSupported).toEqual(
-      linearAsMetadata.grant_types_supported,
+      exampleAsMetadata.grant_types_supported,
     );
     expect(entry.authorizationServer.scopesSupported).toEqual(
-      linearAsMetadata.scopes_supported,
+      exampleAsMetadata.scopes_supported,
     );
     expect(entry.authorizationServer.tokenEndpointAuthMethodsSupported).toEqual(
-      linearAsMetadata.token_endpoint_auth_methods_supported,
+      exampleAsMetadata.token_endpoint_auth_methods_supported,
     );
     expect(entry.authorizationServer.codeChallengeMethodsSupported).toEqual([
       "S256",
@@ -312,21 +312,21 @@ describe("MCP OAuth discovery", () => {
   test("requests refresh_token when the AS advertises it, and omits it when the AS explicitly doesn't", async () => {
     // Load-bearing: over-requesting a grant type an AS doesn't support risks
     // outright registration rejection on strict servers; under-requesting it
-    // when unadvertised loses refresh entirely for servers like Linear/Granola
+    // when unadvertised loses refresh entirely for servers that omit it
     // that do support it.
     const { fetchImpl: withRefresh, requests: withRefreshRequests } = fakeFetch(
       {
-        "https://mcp.linear.app/register": {
+        "https://mcp.example.com/register": {
           status: 200,
-          body: { client_id: "linear-client" },
+          body: { client_id: "example-client" },
         },
       },
     );
     await registerMcpClient({
-      registrationEndpoint: "https://mcp.linear.app/register",
+      registrationEndpoint: "https://mcp.example.com/register",
       redirectUris: ["http://127.0.0.1:18080/callback"],
       clientName: "Corbits",
-      grantTypesSupported: linearAsMetadata.grant_types_supported,
+      grantTypesSupported: exampleAsMetadata.grant_types_supported,
       fetchImpl: withRefresh,
     });
     const withRefreshBody: unknown = JSON.parse(
@@ -427,14 +427,14 @@ describe("selectMcpScopes", () => {
     // the challenge is authoritative for the current operation even when it
     // disagrees with scopes_supported.
     const entry: McpLoginEntry = {
-      resourceUrl: linearProtectedResource.resource,
+      resourceUrl: exampleProtectedResource.resource,
       authorizationServer: {
-        issuer: linearAsMetadata.issuer,
-        authorizationEndpoint: linearAsMetadata.authorization_endpoint,
-        tokenEndpoint: linearAsMetadata.token_endpoint,
-        scopesSupported: linearAsMetadata.scopes_supported,
+        issuer: exampleAsMetadata.issuer,
+        authorizationEndpoint: exampleAsMetadata.authorization_endpoint,
+        tokenEndpoint: exampleAsMetadata.token_endpoint,
+        scopesSupported: exampleAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: linearProtectedResource.scopes_supported,
+      resourceScopesSupported: exampleProtectedResource.scopes_supported,
     };
     expect(selectMcpScopes({ entry, challengeScope: "read" })).toEqual([
       "read",
@@ -443,14 +443,14 @@ describe("selectMcpScopes", () => {
 
   test("falls back to the resource's scopes_supported when there is no challenge", () => {
     const entry: McpLoginEntry = {
-      resourceUrl: linearProtectedResource.resource,
+      resourceUrl: exampleProtectedResource.resource,
       authorizationServer: {
-        issuer: linearAsMetadata.issuer,
-        authorizationEndpoint: linearAsMetadata.authorization_endpoint,
-        tokenEndpoint: linearAsMetadata.token_endpoint,
-        scopesSupported: linearAsMetadata.scopes_supported,
+        issuer: exampleAsMetadata.issuer,
+        authorizationEndpoint: exampleAsMetadata.authorization_endpoint,
+        tokenEndpoint: exampleAsMetadata.token_endpoint,
+        scopesSupported: exampleAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: linearProtectedResource.scopes_supported,
+      resourceScopesSupported: exampleProtectedResource.scopes_supported,
     };
     expect(selectMcpScopes({ entry })).toEqual(["read", "write"]);
   });
@@ -467,19 +467,19 @@ describe("selectMcpScopes", () => {
     expect(selectMcpScopes({ entry })).toEqual([]);
   });
 
-  test("adds offline_access when refresh is wanted and the AS advertises it (Granola shape)", () => {
-    // Load-bearing: Granola's AS scopes_supported includes offline_access;
+  test("adds offline_access when refresh is wanted and the AS advertises it (AS advertises offline_access)", () => {
+    // Load-bearing: an AS whose scopes_supported includes offline_access;
     // wanting a refresh token should add it per the spec's Refresh Tokens
     // section, without the caller having to know the literal scope name.
     const entry: McpLoginEntry = {
-      resourceUrl: granolaProtectedResource.resource,
+      resourceUrl: offlineProtectedResource.resource,
       authorizationServer: {
-        issuer: granolaAsMetadata.issuer,
-        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
-        tokenEndpoint: granolaAsMetadata.token_endpoint,
-        scopesSupported: granolaAsMetadata.scopes_supported,
+        issuer: offlineAsMetadata.issuer,
+        authorizationEndpoint: offlineAsMetadata.authorization_endpoint,
+        tokenEndpoint: offlineAsMetadata.token_endpoint,
+        scopesSupported: offlineAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+      resourceScopesSupported: offlineProtectedResource.scopes_supported,
     };
     expect(selectMcpScopes({ entry, wantRefresh: true })).toEqual([
       "mcp",
@@ -487,18 +487,18 @@ describe("selectMcpScopes", () => {
     ]);
   });
 
-  test("does not add offline_access when the AS doesn't advertise it (Linear shape)", () => {
-    // Load-bearing: Linear's AS scopes_supported has no offline_access;
+  test("does not add offline_access when the AS doesn't advertise it (AS omits offline_access)", () => {
+    // Load-bearing: an AS whose scopes_supported has no offline_access;
     // adding it anyway would send a scope the server never agreed to.
     const entry: McpLoginEntry = {
-      resourceUrl: linearProtectedResource.resource,
+      resourceUrl: exampleProtectedResource.resource,
       authorizationServer: {
-        issuer: linearAsMetadata.issuer,
-        authorizationEndpoint: linearAsMetadata.authorization_endpoint,
-        tokenEndpoint: linearAsMetadata.token_endpoint,
-        scopesSupported: linearAsMetadata.scopes_supported,
+        issuer: exampleAsMetadata.issuer,
+        authorizationEndpoint: exampleAsMetadata.authorization_endpoint,
+        tokenEndpoint: exampleAsMetadata.token_endpoint,
+        scopesSupported: exampleAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: linearProtectedResource.scopes_supported,
+      resourceScopesSupported: exampleProtectedResource.scopes_supported,
     };
     expect(selectMcpScopes({ entry, wantRefresh: true })).toEqual([
       "read",
@@ -506,47 +506,47 @@ describe("selectMcpScopes", () => {
     ]);
   });
 
-  test("wants a refresh token by default, adding offline_access when the AS advertises it (Granola shape)", () => {
+  test("wants a refresh token by default, adding offline_access when the AS advertises it (AS advertises offline_access)", () => {
     // Load-bearing: refresh is the point of this ticket — a caller that
     // doesn't pass wantRefresh should still get offline_access when the AS
     // supports it, not silently lose refresh unless they remember the flag.
     const entry: McpLoginEntry = {
-      resourceUrl: granolaProtectedResource.resource,
+      resourceUrl: offlineProtectedResource.resource,
       authorizationServer: {
-        issuer: granolaAsMetadata.issuer,
-        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
-        tokenEndpoint: granolaAsMetadata.token_endpoint,
-        scopesSupported: granolaAsMetadata.scopes_supported,
+        issuer: offlineAsMetadata.issuer,
+        authorizationEndpoint: offlineAsMetadata.authorization_endpoint,
+        tokenEndpoint: offlineAsMetadata.token_endpoint,
+        scopesSupported: offlineAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+      resourceScopesSupported: offlineProtectedResource.scopes_supported,
     };
     expect(selectMcpScopes({ entry })).toEqual(["mcp", "offline_access"]);
   });
 
-  test("wanting a refresh token by default adds nothing extra when the AS doesn't advertise offline_access (Linear shape)", () => {
+  test("wanting a refresh token by default adds nothing extra when the AS doesn't advertise offline_access (AS omits offline_access)", () => {
     const entry: McpLoginEntry = {
-      resourceUrl: linearProtectedResource.resource,
+      resourceUrl: exampleProtectedResource.resource,
       authorizationServer: {
-        issuer: linearAsMetadata.issuer,
-        authorizationEndpoint: linearAsMetadata.authorization_endpoint,
-        tokenEndpoint: linearAsMetadata.token_endpoint,
-        scopesSupported: linearAsMetadata.scopes_supported,
+        issuer: exampleAsMetadata.issuer,
+        authorizationEndpoint: exampleAsMetadata.authorization_endpoint,
+        tokenEndpoint: exampleAsMetadata.token_endpoint,
+        scopesSupported: exampleAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: linearProtectedResource.scopes_supported,
+      resourceScopesSupported: exampleProtectedResource.scopes_supported,
     };
     expect(selectMcpScopes({ entry })).toEqual(["read", "write"]);
   });
 
   test("wantRefresh: false opts out of offline_access", () => {
     const entry: McpLoginEntry = {
-      resourceUrl: granolaProtectedResource.resource,
+      resourceUrl: offlineProtectedResource.resource,
       authorizationServer: {
-        issuer: granolaAsMetadata.issuer,
-        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
-        tokenEndpoint: granolaAsMetadata.token_endpoint,
-        scopesSupported: granolaAsMetadata.scopes_supported,
+        issuer: offlineAsMetadata.issuer,
+        authorizationEndpoint: offlineAsMetadata.authorization_endpoint,
+        tokenEndpoint: offlineAsMetadata.token_endpoint,
+        scopesSupported: offlineAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+      resourceScopesSupported: offlineProtectedResource.scopes_supported,
     };
     expect(selectMcpScopes({ entry, wantRefresh: false })).toEqual(["mcp"]);
   });
@@ -555,14 +555,14 @@ describe("selectMcpScopes", () => {
 describe("mcpClientConfig scope selection", () => {
   test("uses selectMcpScopes by default", () => {
     const entry: McpLoginEntry = {
-      resourceUrl: granolaProtectedResource.resource,
+      resourceUrl: offlineProtectedResource.resource,
       authorizationServer: {
-        issuer: granolaAsMetadata.issuer,
-        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
-        tokenEndpoint: granolaAsMetadata.token_endpoint,
-        scopesSupported: granolaAsMetadata.scopes_supported,
+        issuer: offlineAsMetadata.issuer,
+        authorizationEndpoint: offlineAsMetadata.authorization_endpoint,
+        tokenEndpoint: offlineAsMetadata.token_endpoint,
+        scopesSupported: offlineAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+      resourceScopesSupported: offlineProtectedResource.scopes_supported,
     };
     const config = mcpClientConfig(entry, {
       clientId: "client",
@@ -578,14 +578,14 @@ describe("mcpClientConfig scope selection", () => {
     // doesn't pass wantRefresh should still land offline_access when the AS
     // supports it.
     const entry: McpLoginEntry = {
-      resourceUrl: granolaProtectedResource.resource,
+      resourceUrl: offlineProtectedResource.resource,
       authorizationServer: {
-        issuer: granolaAsMetadata.issuer,
-        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
-        tokenEndpoint: granolaAsMetadata.token_endpoint,
-        scopesSupported: granolaAsMetadata.scopes_supported,
+        issuer: offlineAsMetadata.issuer,
+        authorizationEndpoint: offlineAsMetadata.authorization_endpoint,
+        tokenEndpoint: offlineAsMetadata.token_endpoint,
+        scopesSupported: offlineAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+      resourceScopesSupported: offlineProtectedResource.scopes_supported,
     };
     const config = mcpClientConfig(entry, {
       clientId: "client",
@@ -596,14 +596,14 @@ describe("mcpClientConfig scope selection", () => {
 
   test("an explicit scopes option overrides selectMcpScopes", () => {
     const entry: McpLoginEntry = {
-      resourceUrl: granolaProtectedResource.resource,
+      resourceUrl: offlineProtectedResource.resource,
       authorizationServer: {
-        issuer: granolaAsMetadata.issuer,
-        authorizationEndpoint: granolaAsMetadata.authorization_endpoint,
-        tokenEndpoint: granolaAsMetadata.token_endpoint,
-        scopesSupported: granolaAsMetadata.scopes_supported,
+        issuer: offlineAsMetadata.issuer,
+        authorizationEndpoint: offlineAsMetadata.authorization_endpoint,
+        tokenEndpoint: offlineAsMetadata.token_endpoint,
+        scopesSupported: offlineAsMetadata.scopes_supported,
       },
-      resourceScopesSupported: granolaProtectedResource.scopes_supported,
+      resourceScopesSupported: offlineProtectedResource.scopes_supported,
     };
     const config = mcpClientConfig(entry, {
       clientId: "client",
