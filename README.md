@@ -96,7 +96,9 @@ The callback server binds only loopback addresses (`127.0.0.0/8` or `::1`) on th
 | `GET /oauth-logins/:loginId`    | Poll for completion; returns the credential id when done.                                                                              |
 | `DELETE /oauth-logins/:loginId` | Cancel.                                                                                                                                |
 
-A resource-URL login discovers the server's authorization server, registers a client and stores its client id and token URL on the credential, so the refresher renews it without a registry entry. It needs the mount's `callbackUrl` and `store` options (below). The PKCE verifier never leaves the hub process.
+A resource-URL login discovers the server's authorization server, registers a client and stores its client id, token URL and resource on the credential, so the refresher renews it without a registry entry. It needs the mount's `callbackUrl` and `store` options (below). The PKCE verifier never leaves the hub process.
+
+What the callback route relies on: PKCE S256 is required of the server (discovery refuses one that does not advertise it); the `state` is 32 random bytes, single-use and bound to the tenant and principal that started the login; the RFC 8707 `resource` goes on the authorize, exchange and refresh requests; when the server advertises RFC 9207 the redirect's `iss` must match the discovered issuer; the page is served `no-store` / `no-referrer`; and `callbackUrl` must be `https` unless it is loopback (`localhost`, `127.x`, `::1`), which is what local development uses.
 
 ## Using with Interchange
 

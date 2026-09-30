@@ -12,6 +12,9 @@ export type OAuthClientConfig = {
   tokenUrl: string;
   redirectUri: string;
   scopes: readonly string[];
+  // RFC 8707 resource indicator, sent on the authorize request and on every
+  // token request so the issued token is audience-bound to that resource.
+  resource?: string;
   // Extra authorize-request params a provider requires.
   extraAuthorizeParams?: Record<string, string>;
   tokenTimeoutMs: number;
@@ -21,7 +24,7 @@ export type OAuthClientConfig = {
 // fields, so a host holding only a stored client id and token URL can refresh.
 export type TokenEndpointConfig = Pick<
   OAuthClientConfig,
-  "clientId" | "tokenUrl" | "tokenTimeoutMs"
+  "clientId" | "tokenUrl" | "tokenTimeoutMs" | "resource"
 >;
 
 /**
@@ -42,6 +45,9 @@ export function buildAuthorizeUrl(
   url.searchParams.set("code_challenge", pkce.challenge);
   url.searchParams.set("code_challenge_method", pkce.method);
   url.searchParams.set("state", state);
+  if (config.resource !== undefined) {
+    url.searchParams.set("resource", config.resource);
+  }
   if (config.extraAuthorizeParams !== undefined) {
     for (const [key, value] of Object.entries(config.extraAuthorizeParams)) {
       url.searchParams.set(key, value);
@@ -184,6 +190,7 @@ export async function exchangeCode(
     redirect_uri: config.redirectUri,
     code_verifier: verifier,
   });
+  if (config.resource !== undefined) body.set("resource", config.resource);
   return postToken(config, body, fetchImpl);
 }
 
@@ -201,5 +208,6 @@ export async function refreshTokenRequest(
     refresh_token: refreshToken,
     client_id: config.clientId,
   });
+  if (config.resource !== undefined) body.set("resource", config.resource);
   return postToken(config, body, fetchImpl);
 }

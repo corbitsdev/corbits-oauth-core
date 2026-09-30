@@ -13,6 +13,7 @@ import {
 import {
   OAUTH_CLIENT_ID_METADATA_KEY,
   OAUTH_PROVIDER_METADATA_KEY,
+  OAUTH_RESOURCE_METADATA_KEY,
   OAUTH_TOKEN_URL_METADATA_KEY,
   writeOAuthTokens,
 } from "./credentials.js";
@@ -93,6 +94,7 @@ function registeredClientRefresh(
 ): ((refreshSecret: string, now: number) => Promise<BaseTokens>) | undefined {
   const clientId = metadata[OAUTH_CLIENT_ID_METADATA_KEY];
   const tokenUrl = metadata[OAUTH_TOKEN_URL_METADATA_KEY];
+  const resource = metadata[OAUTH_RESOURCE_METADATA_KEY];
   if (clientId === undefined || tokenUrl === undefined) return undefined;
   return async (refreshSecret, now) =>
     baseTokensFromResponse(
@@ -101,6 +103,7 @@ function registeredClientRefresh(
           clientId,
           tokenUrl,
           tokenTimeoutMs: REGISTERED_CLIENT_TOKEN_TIMEOUT_MS,
+          ...(resource !== undefined ? { resource } : {}),
         },
         refreshSecret,
       ),

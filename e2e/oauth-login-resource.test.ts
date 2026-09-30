@@ -27,7 +27,10 @@ const resourceUrl = "https://mcp.example.com/mcp";
 const callbackUrl = "https://hub.example.com/api/oauth/callback";
 
 /** A fake MCP server and authorization server behind one `fetch`. */
-function fakeAuthorizationServer(grantTypesSupported?: string[]) {
+function fakeAuthorizationServer(
+  grantTypesSupported?: string[],
+  issParameterSupported = false,
+) {
   const registrations: unknown[] = [];
   const tokenRequests: URLSearchParams[] = [];
   const json = (body: unknown, status = 200) =>
@@ -53,6 +56,7 @@ function fakeAuthorizationServer(grantTypesSupported?: string[]) {
           token_endpoint: "https://auth.example.com/token",
           registration_endpoint: "https://auth.example.com/register",
           code_challenge_methods_supported: ["S256"],
+          authorization_response_iss_parameter_supported: issParameterSupported,
           ...(grantTypesSupported !== undefined
             ? { grant_types_supported: grantTypesSupported }
             : {}),
@@ -131,6 +135,22 @@ function app(fetchImpl: FetchLike) {
   return root;
 }
 
+async function settled(
+  host: Hono,
+  loginId: string,
+): Promise<{ status: string; credentialId?: string; message?: string }> {
+  let status: { status: string; credentialId?: string; message?: string } = {
+    status: "pending",
+  };
+  for (let i = 0; i < 50 && status.status === "pending"; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    status = (await (
+      await host.request(`/oauth-logins/${loginId}`)
+    ).json()) as typeof status;
+  }
+  return status;
+}
+
 function post(host: Hono, body: unknown) {
   return host.request("/oauth-logins", {
     method: "POST",
@@ -170,19 +190,21 @@ describe("a login started from a resource URL", () => {
       `/api/oauth/callback?code=the-code&state=${state}`,
     );
     expect(callback.status).toBe(200);
+    expect(callback.headers.get("cache-control")).toBe("no-store");
+    expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
+    // Single use: the same state cannot complete a second time.
+    const replay = await host.request(
+      `/api/oauth/callback?code=again&state=${state}`,
+    );
+    expect(replay.status).toBe(400);
 
-    let status: { status: string; credentialId?: string } = {
-      status: "pending",
-    };
-    for (let i = 0; i < 50 && status.status === "pending"; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      status = (await (
-        await host.request(`/oauth-logins/${loginId}`)
-      ).json()) as typeof status;
-    }
+    const status = await settled(host, loginId);
     expect(status.status).toBe("completed");
     expect(as.tokenRequests[0]?.get("code")).toBe("the-code");
     expect(as.tokenRequests[0]?.get("redirect_uri")).toBe(callbackUrl);
+    expect(as.tokenRequests[0]?.get("code_verifier")).toBeTruthy();
+    // RFC 8707: the token request names the resource, not just the authorize request.
+    expect(as.tokenRequests[0]?.get("resource")).toBe(resourceUrl);
 
     const row = await t.db.query.credential.findFirst({
       where: eq(credential.id, status.credentialId ?? ""),
@@ -206,6 +228,44 @@ describe("a login started from a resource URL", () => {
     expect(as.registrations[0]).toMatchObject({
       grant_types: ["authorization_code"],
     });
+  });
+
+  it("rejects a redirect whose iss is not the discovered issuer (RFC 9207)", async () => {
+    // Load-bearing: without this check a second authorization server that
+    // learned the state could complete the login with its own code.
+    const as = fakeAuthorizationServer(undefined, true);
+    const host = app(as.fetchImpl);
+    const started = await post(host, {
+      resourceUrl,
+      providerId: "prov_a",
+      credentialName: "remote-4",
+    });
+    const { loginId, authorizeUrl } = (await started.json()) as {
+      loginId: string;
+      authorizeUrl: string;
+    };
+    const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
+    const forged = await host.request(
+      `/api/oauth/callback?code=x&state=${state}&iss=${encodeURIComponent("https://other.example.com")}`,
+    );
+    expect(forged.status).toBe(400);
+    expect((await settled(host, loginId)).status).toBe("failed");
+    expect(as.tokenRequests).toHaveLength(0);
+  });
+
+  it("refuses a cleartext callbackUrl off loopback", () => {
+    expect(() =>
+      mountOAuthLogin(new Hono<TenantEnv>(), {
+        db: t.db,
+        cipher: plainCipher,
+        providers: {},
+        callbackUrl: "http://hub.example.com/api/oauth/callback",
+        store: createOAuthLoginStore(),
+        requireGrant: async (_c, next) => {
+          await next();
+        },
+      }),
+    ).toThrow(/https/);
   });
 
   it("surfaces a server without dynamic registration as a 502", async () => {

@@ -96,9 +96,36 @@ export function mountOAuthCallback(
       state: c.req.query("state"),
       code: c.req.query("code"),
       error: c.req.query("error"),
+      errorDescription: c.req.query("error_description"),
+      iss: c.req.query("iss"),
     });
+    // The code sits in this URL: keep it out of caches and referrers.
+    c.header("cache-control", "no-store");
+    c.header("referrer-policy", "no-referrer");
     return c.html(html, status);
   });
+}
+
+/**
+ * RFC 8252 §8.3 / RFC 9700: the redirect carrying the authorization code
+ * must travel over TLS unless it stays on the machine.
+ */
+function assertSecureCallbackUrl(callbackUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(callbackUrl);
+  } catch {
+    throw new Error(`callbackUrl is not an absolute URL: ${callbackUrl}`);
+  }
+  const loopback =
+    url.hostname === "localhost" ||
+    url.hostname === "[::1]" ||
+    url.hostname === "::1" ||
+    url.hostname.startsWith("127.");
+  if (url.protocol !== "https:" && !loopback)
+    throw new Error(
+      `callbackUrl must use https unless it is loopback; received ${callbackUrl}`,
+    );
 }
 
 export type MountOAuthLoginOpts = {
@@ -137,6 +164,7 @@ export function mountOAuthLogin(
 ): void {
   const { logins, callbacks } = opts.store ?? createOAuthLoginStore();
   const ttlMs = opts.loginTtlMs ?? DEFAULT_LOGIN_TTL_MS;
+  if (opts.callbackUrl !== undefined) assertSecureCallbackUrl(opts.callbackUrl);
 
   const owner = (c: {
     get(key: "tenant" | "principal"): { id: string };
@@ -222,7 +250,14 @@ export function mountOAuthLogin(
             [OAUTH_TOKEN_URL_METADATA_KEY]: config.tokenUrl,
             [OAUTH_RESOURCE_METADATA_KEY]: entry.resourceUrl,
           }),
-          startCallbackServer: callbacks.start,
+          startCallbackServer: (state) =>
+            callbacks.start(
+              state,
+              entry.authorizationServer
+                .authorizationResponseIssParameterSupported === true
+                ? { expectedIssuer: entry.authorizationServer.issuer }
+                : {},
+            ),
         },
       };
     } catch (cause) {
