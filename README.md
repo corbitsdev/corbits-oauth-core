@@ -88,14 +88,17 @@ The callback server binds only loopback addresses (`127.0.0.0/8` or `::1`) on th
 | `createOAuthTokenRefresher(opts)` | Background refresher with `start()` and `stop()`.         |
 | `persistOAuthCredential`          | Writes tokens into an encrypted `oauth_token` credential. |
 
-| Route                           |                                                                                         |
-| ------------------------------- | --------------------------------------------------------------------------------------- |
-| `GET /oauth-logins/providers`   | Provider names the host offers.                                                         |
-| `POST /oauth-logins`            | Start a login (`provider`, `credentialName`); returns the authorize URL and a login id. |
-| `GET /oauth-logins/:loginId`    | Poll for completion; returns the credential id when done.                               |
-| `DELETE /oauth-logins/:loginId` | Cancel.                                                                                 |
+| Route                           |                                                                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /oauth-logins/providers`   | Provider names the host offers.                                                                                                        |
+| `POST /oauth-logins`            | Start a login from `provider` or an MCP `resourceUrl` (plus `providerId`, `credentialName`); returns the authorize URL and a login id. |
+| `GET /oauth/callback`           | The redirect target of resource-URL logins (`${baseUrl}/oauth/callback`); needs no grant.                                              |
+| `GET /oauth-logins/:loginId`    | Poll for completion; returns the credential id when done.                                                                              |
+| `DELETE /oauth-logins/:loginId` | Cancel.                                                                                                                                |
 
-The PKCE verifier and the callback listener never leave the hub process.
+A resource-URL login discovers the server's authorization server, registers a client and stores its client id, token URL and resource on the credential, so the refresher renews it without a registry entry. It needs the mount's `callbackUrl` and `store` options (below). The PKCE verifier never leaves the hub process.
+
+What the callback route relies on: PKCE S256 is required of the server (discovery refuses one that does not advertise it); the `state` is 32 random bytes, single-use and bound to the tenant and principal that started the login; the RFC 8707 `resource` goes on the authorize, exchange and refresh requests; when the server advertises RFC 9207 the redirect's `iss` must match the discovered issuer; the page is served `no-store` / `no-referrer`; and `callbackUrl` must be `https` unless it is loopback (`localhost`, `127.x`, `::1`), which is what local development uses.
 
 ## Using with Interchange
 
@@ -146,6 +149,22 @@ export function installOAuthLogin(
 The refresher only updates the credential row. A process that loaded the old token into memory, such as a running sidecar (the agent runtime), keeps it until told to reload, so notify those processes from `onRefreshed`.
 
 The hub entry will move to a separate `@corbits/oauth-hub` package in a later release.
+
+### Resource-URL logins
+
+The redirect lands on a hub-root route outside any tenant, so mount it beside the tenant router and share one store:
+
+```ts
+const store = createOAuthLoginStore();
+mountOAuthCallback(app, { store, path: "/api/oauth/callback" }); // unauthenticated
+mountOAuthLogin(oauthLoginApi, {
+  // ...db, cipher, requireGrant, providers
+  store,
+  callbackUrl: "https://hub.example.com/api/oauth/callback",
+});
+```
+
+`callbackUrl` is the absolute public URL of that route; it is registered verbatim as the redirect_uri.
 
 ## Upgrading from 0.1
 

@@ -26,6 +26,8 @@ export const OAUTH_PROVIDER_METADATA_KEY = "oauthProvider";
  */
 export const OAUTH_CLIENT_ID_METADATA_KEY = "oauthClientId";
 export const OAUTH_TOKEN_URL_METADATA_KEY = "oauthTokenUrl";
+/** The MCP resource URL the dynamically registered login was made for. */
+export const OAUTH_RESOURCE_METADATA_KEY = "oauthResource";
 
 /** Everything the token writes below need — a `db` or an open transaction. */
 export type OAuthCredentialWriter = Pick<DB["db"], "update">;

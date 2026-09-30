@@ -45,6 +45,7 @@ const AuthorizationServerMetadata = type({
   "scopes_supported?": "string[]",
   "token_endpoint_auth_methods_supported?": "string[]",
   "code_challenge_methods_supported?": "string[]",
+  "authorization_response_iss_parameter_supported?": "boolean",
 });
 
 // RFC 7591 §3.2.1 — registration response, narrowed to the assigned client id
@@ -67,6 +68,9 @@ export type McpAuthorizationServer = {
   scopesSupported?: readonly string[];
   tokenEndpointAuthMethodsSupported?: readonly string[];
   codeChallengeMethodsSupported?: readonly string[];
+  // RFC 9207: when true, every authorization response carries `iss` and the
+  // client must reject a redirect whose `iss` is not this issuer.
+  authorizationResponseIssParameterSupported?: boolean;
 };
 
 // A login entry derived from a resource URL: everything the host needs to
@@ -345,6 +349,12 @@ export async function discoverMcpLoginEntry(
               metadata.code_challenge_methods_supported,
           }
         : {}),
+      ...(metadata.authorization_response_iss_parameter_supported !== undefined
+        ? {
+            authorizationResponseIssParameterSupported:
+              metadata.authorization_response_iss_parameter_supported,
+          }
+        : {}),
     },
     ...(resourceScopesSupported !== undefined
       ? { resourceScopesSupported }
@@ -509,10 +519,10 @@ export function mcpClientConfig(
     tokenUrl: entry.authorizationServer.tokenEndpoint,
     redirectUri: opts.redirectUri,
     scopes,
-    extraAuthorizeParams: {
-      resource: entry.resourceUrl,
-      ...opts.extraAuthorizeParams,
-    },
+    resource: entry.resourceUrl,
+    ...(opts.extraAuthorizeParams !== undefined
+      ? { extraAuthorizeParams: opts.extraAuthorizeParams }
+      : {}),
     tokenTimeoutMs: opts.tokenTimeoutMs ?? 30_000,
   };
 }
