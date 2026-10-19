@@ -1,6 +1,6 @@
 {
   "name": "@corbits/oauth-core",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Provider-agnostic OAuth 2.0 authorization-code + PKCE login for desktop/CLI hosts.",
   "keywords": [
     "corbits",
@@ -50,10 +50,10 @@
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "dependencies": {
-    "@intx/db": "^0.4.0",
-    "@intx/hub-api": "^0.4.0",
-    "@intx/hub-common": "^0.4.0",
-    "@intx/types": "^0.4.0",
+    "@intx/db": "^0.5.0",
+    "@intx/hub-api": "^0.5.0",
+    "@intx/hub-common": "^0.5.0",
+    "@intx/types": "^0.5.0",
     "arktype": "^2.2.3",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.11.9"

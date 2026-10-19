@@ -84,9 +84,9 @@ let t: TestDb;
 
 beforeAll(async () => {
   t = await createTestDb();
-  await seedTenant(t.db, "t_a");
-  await seedPrincipal(t.db, "t_a", "p_a");
-  await seedProvider(t.db, "t_a", "prov_a");
+  await seedTenant(t.db, "ta");
+  await seedPrincipal(t.db, "ta", "p_a");
+  await seedProvider(t.db, "ta", "prov_a");
 });
 
 afterAll(() => t.close());
@@ -99,10 +99,10 @@ function app(fetchImpl: FetchLike) {
   host.use(async (c, next) => {
     const at = new Date(0);
     c.set("tenant", {
-      id: "t_a",
-      name: "t_a",
-      slug: "t_a",
-      domain: "t_a.example",
+      id: "ta",
+      name: "ta",
+      slug: "ta",
+      domain: "ta.example",
       parentId: null,
       config: null,
       createdAt: at,
@@ -110,7 +110,7 @@ function app(fetchImpl: FetchLike) {
     });
     c.set("principal", {
       id: "p_a",
-      tenantId: "t_a",
+      tenantId: "ta",
       kind: "user",
       refId: "p_a",
       status: "active",

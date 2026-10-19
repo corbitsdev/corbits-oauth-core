@@ -21,9 +21,9 @@ let t: TestDb;
 
 beforeAll(async () => {
   t = await createTestDb();
-  await seedTenant(t.db, "t_a");
-  await seedPrincipal(t.db, "t_a", "p_a");
-  await seedProvider(t.db, "t_a", "prov");
+  await seedTenant(t.db, "ta");
+  await seedPrincipal(t.db, "ta", "p_a");
+  await seedProvider(t.db, "ta", "prov");
 });
 
 afterAll(() => t.close());
@@ -31,7 +31,7 @@ afterAll(() => t.close());
 async function seedDue(id: string): Promise<void> {
   await t.db.insert(credential).values({
     id,
-    tenantId: "t_a",
+    tenantId: "ta",
     providerId: "prov",
     principalId: "p_a",
     name: id,
