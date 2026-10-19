@@ -33,16 +33,16 @@ let t: TestDb;
 
 beforeAll(async () => {
   t = await createTestDb();
-  await seedTenant(t.db, "t_parent");
-  await seedTenant(t.db, "t_a", "t_parent");
-  await seedTenant(t.db, "t_other");
-  await seedPrincipal(t.db, "t_a", "p_a");
-  await seedPrincipal(t.db, "t_a", "p_b");
-  await seedProvider(t.db, "t_parent", "prov_inherited");
-  await seedProvider(t.db, "t_other", "prov_foreign");
+  await seedTenant(t.db, "tparent");
+  await seedTenant(t.db, "ta", "tparent");
+  await seedTenant(t.db, "tother");
+  await seedPrincipal(t.db, "ta", "p_a");
+  await seedPrincipal(t.db, "ta", "p_b");
+  await seedProvider(t.db, "tparent", "prov_inherited");
+  await seedProvider(t.db, "tother", "prov_foreign");
   await seedCredential(t.db, {
     id: "cred_b",
-    tenantId: "t_a",
+    tenantId: "ta",
     providerId: "prov_inherited",
     principalId: "p_b",
     name: "prod-key",
@@ -51,7 +51,7 @@ beforeAll(async () => {
   });
   await seedCredential(t.db, {
     id: "cred_key",
-    tenantId: "t_a",
+    tenantId: "ta",
     providerId: "prov_inherited",
     principalId: "p_a",
     name: "api-key",
@@ -67,18 +67,18 @@ function app(principalId: string) {
   host.use(async (c, next) => {
     const at = new Date(0);
     c.set("tenant", {
-      id: "t_a",
-      name: "t_a",
-      slug: "t_a",
-      domain: "t_a.example",
-      parentId: "t_parent",
+      id: "ta",
+      name: "ta",
+      slug: "ta",
+      domain: "ta.example",
+      parentId: "tparent",
       config: null,
       createdAt: at,
       updatedAt: at,
     });
     c.set("principal", {
       id: principalId,
-      tenantId: "t_a",
+      tenantId: "ta",
       kind: "user",
       refId: principalId,
       status: "active",
@@ -133,7 +133,7 @@ describe("the OAuth login target", () => {
     const write = persistOAuthCredential({
       db: t.db,
       cipher: plainCipher,
-      tenantId: "t_a",
+      tenantId: "ta",
       principalId: "p_a",
       providerId: "prov_inherited",
       provider: "acme",
@@ -155,7 +155,7 @@ describe("the OAuth login target", () => {
       persistOAuthCredential({
         db: t.db,
         cipher: plainCipher,
-        tenantId: "t_a",
+        tenantId: "ta",
         principalId: "p_a",
         providerId: "prov_inherited",
         provider: "acme",
