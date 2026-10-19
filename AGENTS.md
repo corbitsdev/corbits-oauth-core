@@ -43,3 +43,9 @@ bun install
 bun run check   # typecheck + lint + format:check + test
 bun run test:e2e # Postgres tests; DATABASE_URL, default localhost:5432
 ```
+
+## Conventions
+
+- Read `README.md` before changing public behavior.
+- Keep changes focused; update docs and tests alongside code changes.
+- Run `bun run check` before declaring work complete.
