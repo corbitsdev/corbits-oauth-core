@@ -7,6 +7,7 @@ import { Hono, type MiddlewareHandler } from "hono";
 import {
   baseTokensFromResponse,
   buildAuthorizeUrl,
+  createLoginRegistry,
   discoverMcpLoginEntry,
   exchangeCode,
   mcpClientConfig,
@@ -17,6 +18,7 @@ import {
   type BaseTokens,
   type CallbackServer,
   type FetchLike,
+  type OAuthLoginHandle,
   type OAuthClientConfig,
 } from "../index.js";
 import {
@@ -163,6 +165,19 @@ export function mountOAuthLogin(
   opts: MountOAuthLoginOpts,
 ): void {
   const { logins, callbacks } = opts.store ?? createOAuthLoginStore();
+  // One live login per provider: its callback server binds the one port the
+  // authorization server will redirect to, so a second attempt has nowhere
+  // to listen. Resuming is also what keeps the authorize page already open
+  // in the operator's browser valid (CL-8857).
+  const inFlight = createLoginRegistry();
+  const loginIdOf = new Map<string, string>();
+  // Cleanup names the login it belongs to, never just its provider. A login
+  // leaves the registry the moment it settles, but its credential is still
+  // being stored; a newer login for the same provider -- possibly another
+  // principal's -- can already be live by then, and must not lose its id.
+  const releaseLoginId = (provider: string, loginId: string): void => {
+    if (loginIdOf.get(provider) === loginId) loginIdOf.delete(provider);
+  };
   const ttlMs = opts.loginTtlMs ?? DEFAULT_LOGIN_TTL_MS;
   if (opts.callbackUrl !== undefined) assertSecureCallbackUrl(opts.callbackUrl);
 
@@ -293,20 +308,27 @@ export function mountOAuthLogin(
     const { flow } = resolved;
     const abort = new AbortController();
 
-    let handle;
+    let started: { handle: OAuthLoginHandle<BaseTokens>; resumed: boolean };
     try {
-      handle = await startOAuthLogin(
-        { profile: body.credentialName, signal: abort.signal },
-        {
-          startCallbackServer: flow.startCallbackServer,
-          buildAuthorizeUrl: (pkce, state) =>
-            buildAuthorizeUrl(flow.config, pkce, state),
-          exchangeCode: flow.exchange,
-          // Persistence runs below once the login id exists to report against.
-          saveProfile: () => Promise.resolve(),
-          // The browser opens the authorize URL; the hub never owns a display.
-          openInBrowser: () => undefined,
-        },
+      started = await inFlight.startOrResume(
+        flow.provider,
+        () =>
+          startOAuthLogin(
+            { profile: body.credentialName, signal: abort.signal },
+            {
+              startCallbackServer: flow.startCallbackServer,
+              buildAuthorizeUrl: (pkce, state) =>
+                buildAuthorizeUrl(flow.config, pkce, state),
+              exchangeCode: flow.exchange,
+              // Persistence runs below once the login id exists to report against.
+              saveProfile: () => Promise.resolve(),
+              // The browser opens the authorize URL; the hub never owns a display.
+              openInBrowser: () => undefined,
+            },
+          ),
+        // A login belongs to the principal who started it: resuming is for
+        // them, not for whoever asks next.
+        { tag: `${tenantId}:${principalId}` },
       );
     } catch (cause) {
       opts.onError?.(cause, { provider: flow.provider });
@@ -315,14 +337,34 @@ export function mountOAuthLogin(
         409,
       );
     }
+    const handle = started.handle;
+    if (started.resumed) {
+      const loginId = loginIdOf.get(flow.provider);
+      // Recorded below in the same tick a login is registered, so a live
+      // entry always has one; saying so beats inventing a second login.
+      if (loginId === undefined) {
+        return c.json(
+          { error: "a login is in flight but cannot be resumed" },
+          409,
+        );
+      }
+      return c.json({ loginId, authorizeUrl: handle.authorizeUrl }, 200);
+    }
 
     const loginId = logins.create({
       tenantId,
       principalId,
       expiresAt: Date.now() + ttlMs,
       abort,
-      cancel: handle.cancel,
+      // This login's own handle, not whatever is live under the provider:
+      // the TTL sweep can reach an expired entry after a newer login has
+      // taken the port, and cancelling by provider would end that one.
+      cancel: () => {
+        handle.cancel();
+        releaseLoginId(flow.provider, loginId);
+      },
     });
+    loginIdOf.set(flow.provider, loginId);
 
     // Detached on purpose: the redirect lands minutes after this response.
     void handle.completed.then(
@@ -341,6 +383,7 @@ export function mountOAuthLogin(
             metadata: flow.metadata(staged.profile.tokens),
           });
           logins.settle(loginId, { status: "completed", credentialId });
+          releaseLoginId(flow.provider, loginId);
         } catch (cause) {
           opts.onError?.(cause, { provider: flow.provider });
           logins.settle(loginId, {
@@ -350,6 +393,7 @@ export function mountOAuthLogin(
                 ? cause.message
                 : "the tokens could not be stored",
           });
+          releaseLoginId(flow.provider, loginId);
         }
       },
       (cause: unknown) => {
@@ -358,6 +402,7 @@ export function mountOAuthLogin(
           status: "failed",
           message: cause instanceof Error ? cause.message : String(cause),
         });
+        releaseLoginId(flow.provider, loginId);
       },
     );
 

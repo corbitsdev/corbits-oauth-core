@@ -1,4 +1,7 @@
-import { startCallbackServer } from "./callback-server.js";
+import {
+  startCallbackServer,
+  type CallbackFailure,
+} from "./callback-server.js";
 import { buildAuthorizeUrl, type OAuthClientConfig } from "./client.js";
 import { startOAuthLogin, type OAuthLoginDeps } from "./login.js";
 import type { AuthProfile, BaseTokens } from "./tokens.js";
@@ -60,9 +63,23 @@ export function callbackTargetFor(config: OAuthClientConfig): {
 export const signedInHtml =
   "<!doctype html><meta charset=utf-8><title>Signed in</title><p>Signed in. You can close this tab.";
 
-// `reason` echoes the redirect's `error` parameter, which anyone can set.
-export const signInFailedHtml = (reason: string): string =>
-  `<!doctype html><meta charset=utf-8><title>Sign-in failed</title><p>Sign-in failed: ${reason.replace(/[<&]/g, "")}`;
+/**
+ * A refused redirect is reported as a code, not prose: what to tell the
+ * person differs by product and brand; what the redirect was does not. The
+ * provider's own `error` parameter is echoed only as escaped text.
+ */
+export const signInFailedHtml = (failure: CallbackFailure): string => {
+  const detail =
+    failure.providerError === undefined
+      ? ""
+      : ` (${failure.providerError.replace(/[<&]/g, "")})`;
+  const text = {
+    state_mismatch: "this page is no longer the sign-in being waited for",
+    provider_error: `the provider refused the authorization${detail}`,
+    no_code: "the provider sent no authorization back",
+  }[failure.code];
+  return `<!doctype html><meta charset=utf-8><title>Sign-in failed</title><p>Sign-in failed: ${text}.`;
+};
 
 export type LoginWithProviderOptions = {
   save: OAuthLoginDeps<BaseTokens>["saveProfile"];

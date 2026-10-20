@@ -1,4 +1,8 @@
-import { OAuthCallbackError, type CallbackServer } from "../index.js";
+import {
+  OAuthCallbackError,
+  type CallbackFailure,
+  type CallbackServer,
+} from "../index.js";
 import { signedInHtml, signInFailedHtml } from "../provider.js";
 
 type Outcome = { code: string } | { error: Error };
@@ -68,7 +72,7 @@ export function createRouteCallbacks(): RouteCallbacks {
         port: 0,
         waitForCode(signal) {
           const aborted = () =>
-            finish({ error: new OAuthCallbackError("aborted") });
+            finish({ error: new OAuthCallbackError("aborted", "aborted") });
           if (signal.aborted) aborted();
           else signal.addEventListener("abort", aborted, { once: true });
           wait ??= new Promise<string>((resolve, reject) => {
@@ -88,24 +92,33 @@ export function createRouteCallbacks(): RouteCallbacks {
       const entry = state === undefined ? undefined : pending.get(state);
       // Not a login in flight (or a stale one): refuse without touching any.
       if (entry === undefined)
-        return { status: 400, html: signInFailedHtml("state mismatch") };
-      const failed = (reason: string): CallbackResponse => {
+        return {
+          status: 400,
+          html: signInFailedHtml({ code: "state_mismatch" }),
+        };
+      const failed = (failure: CallbackFailure): CallbackResponse => {
         entry.finish({
-          error: new OAuthCallbackError(`Authorization failed: ${reason}`),
+          error: new OAuthCallbackError(
+            failure.code,
+            `Authorization failed: ${failure.providerError ?? failure.code}`,
+          ),
         });
-        return { status: 400, html: signInFailedHtml(reason) };
+        return { status: 400, html: signInFailedHtml(failure) };
       };
       // RFC 9207 §2.4: a client that knows the server sends `iss` must
       // reject a response whose `iss` is absent or names another issuer.
       if (entry.expectedIssuer !== undefined && iss !== entry.expectedIssuer)
-        return failed("issuer mismatch");
+        return failed({ code: "state_mismatch" });
       if (error !== undefined)
         return failed(
           errorDescription === undefined
-            ? error
-            : `${error}: ${errorDescription}`,
+            ? { code: "provider_error", providerError: error }
+            : {
+                code: "provider_error",
+                providerError: `${error}: ${errorDescription}`,
+              },
         );
-      if (code === undefined || code === "") return failed("no code returned");
+      if (code === undefined || code === "") return failed({ code: "no_code" });
       entry.finish({ code });
       return { status: 200, html: signedInHtml };
     },

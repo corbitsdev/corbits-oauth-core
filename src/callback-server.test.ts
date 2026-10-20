@@ -4,6 +4,7 @@ import {
   OAuthCallbackAddressUnavailableError,
   OAuthCallbackPortInUseError,
   startCallbackServer,
+  type CallbackFailure,
 } from "./index.js";
 
 const config = (port: number, host?: string) => ({
@@ -11,7 +12,8 @@ const config = (port: number, host?: string) => ({
   ...(host === undefined ? {} : { host }),
   path: "/callback",
   doneHtml: "<html>done</html>",
-  failedHtml: (reason: string) => `<html>failed: ${reason}</html>`,
+  failedHtml: (failure: CallbackFailure) =>
+    `<html>failed: ${failure.code}${failure.providerError === undefined ? "" : `:${failure.providerError}`}</html>`,
 });
 
 describe("Callback server startCallbackServer — state validation", () => {
@@ -98,17 +100,32 @@ describe("Callback server startCallbackServer — state validation", () => {
     const server = await startCallbackServer("expected-state", config(0));
     try {
       const waiting = server.waitForCode(new AbortController().signal);
-      const forged = await fetch(
-        `http://127.0.0.1:${server.port}/callback?code=forged&state=wrong-state`,
+      const refused = await fetch(
+        `http://127.0.0.1:${server.port}/callback?code=attacker-code&state=wrong-state`,
       );
-      expect(forged.status).toBe(400);
-      const real = await fetch(
-        `http://127.0.0.1:${server.port}/callback?code=real&state=expected-state`,
+      expect(refused.status).toBe(400);
+      expect(await refused.text()).toContain("state_mismatch");
+
+      // The refusal does not end the login: anything on the machine can reach
+      // this port, so a stray redirect must not be able to cancel the real one.
+      const genuine = await fetch(
+        `http://127.0.0.1:${server.port}/callback?code=real-code&state=expected-state`,
       );
-      expect(real.status).toBe(200);
-      expect(await waiting).toBe("real");
+      expect(genuine.status).toBe(200);
+      expect(await waiting).toBe("real-code");
     } finally {
       server.close();
     }
+  });
+
+  test("closing before a redirect ends the wait", async () => {
+    const server = await startCallbackServer("state", config(0));
+    const waiting = server.waitForCode(new AbortController().signal);
+    server.close();
+
+    // Without this a caller that gave up would await a redirect that can no
+    // longer be received, and anything tracking the login would never learn
+    // it had ended.
+    await expect(waiting).rejects.toThrow(/closed before an authorization/);
   });
 });
