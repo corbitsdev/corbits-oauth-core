@@ -155,6 +155,11 @@ export type FetchLike = typeof fetch;
 const OAUTH_ERROR_CODE = /^[a-z0-9_]{1,64}$/;
 
 function oauthErrorCode(body: string): string {
+  const parsed = errorCodeFromJson(body) ?? errorCodeFromPrefix(body);
+  return parsed ?? "";
+}
+
+function errorCodeFromJson(body: string): string | undefined {
   try {
     const parsed: unknown = JSON.parse(body);
     if (
@@ -167,9 +172,20 @@ function oauthErrorCode(body: string): string {
       return parsed.error;
     }
   } catch {
-    // Non-JSON bodies contribute no public detail.
+    // Truncated or non-JSON bodies fall through to a prefix scan. The scan
+    // still returns only the error code, never error_description.
   }
-  return "";
+  return undefined;
+}
+
+// A long error_description used to be sliced to 4096 bytes before JSON.parse,
+// so the object no longer parsed and invalid_grant was dropped. The code is a
+// small token and can be read without the rest of the document.
+function errorCodeFromPrefix(body: string): string | undefined {
+  const match = /"error"\s*:\s*"([a-z0-9_]{1,64})"/.exec(body);
+  const code = match?.[1];
+  if (code !== undefined && OAUTH_ERROR_CODE.test(code)) return code;
+  return undefined;
 }
 
 function isRedirectResponse(res: Response): boolean {
@@ -212,7 +228,7 @@ async function postToken(
   if (!res.ok) {
     let detail = "";
     try {
-      detail = oauthErrorCode((await res.text()).slice(0, 4096));
+      detail = oauthErrorCode(await res.text());
     } catch {
       // Non-2xx is the error; the body is not public detail.
     }
