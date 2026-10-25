@@ -450,7 +450,7 @@ function grantedScope(
   return echoed ?? requested;
 }
 
-function assertClientMetadataUrl(raw: string): void {
+function canonicalClientMetadataUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw);
@@ -466,15 +466,22 @@ function assertClientMetadataUrl(raw: string): void {
       "client metadata URL must not contain a fragment or userinfo",
     );
   const afterScheme = raw.slice(raw.indexOf("://") + 3);
-  const pathStart = afterScheme.indexOf("/");
+  // `\` is a path separator for the URL parser, same as `/`. Splitting only on
+  // `/` lets `a\..\client.json` through, while `new URL` fetches `/client.json`.
+  const pathStart = afterScheme.search(/[\\/]/);
   const rawPath =
     pathStart === -1
       ? ""
       : (afterScheme.slice(pathStart).split(/[?#]/, 1)[0] ?? "");
-  if (rawPath.split("/").some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment)))
+  if (
+    rawPath.split(/[\\/]/).some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment))
+  )
     throw new OAuthDiscoveryError(
       "client metadata URL must not contain dot segments",
     );
+  // One identifier for the client id and the URL a fetch will request: host
+  // case and the default https port are not distinct from the canonical URL.
+  return url.href;
 }
 
 /**
@@ -502,10 +509,9 @@ export function clientRegistrationPlan(opts: {
     opts.clientIdMetadataDocumentSupported === true &&
     opts.clientMetadataUrl !== undefined
   ) {
-    assertClientMetadataUrl(opts.clientMetadataUrl);
     return {
       mechanism: "client-id-metadata",
-      clientId: opts.clientMetadataUrl,
+      clientId: canonicalClientMetadataUrl(opts.clientMetadataUrl),
     };
   }
   if (opts.registrationEndpoint !== undefined) {

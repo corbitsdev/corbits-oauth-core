@@ -876,4 +876,31 @@ describe("clientRegistrationPlan", () => {
       }),
     ).toThrow(OAuthDiscoveryError);
   });
+
+  test("rejects a backslash dot-segment and returns one canonical client id", () => {
+    // Load-bearing: the URL parser treats `\` as `/`, so `a\..\client.json`
+    // is fetched as `/client.json`. Host case and an explicit :443 are the
+    // same URL a fetch requests, and must be the client id too.
+    expect(() =>
+      clientRegistrationPlan({
+        clientIdMetadataDocumentSupported: true,
+        clientMetadataUrl: "https://hub.example.com/a\\..\\client.json",
+      }),
+    ).toThrow(OAuthDiscoveryError);
+    expect(() =>
+      clientRegistrationPlan({
+        clientIdMetadataDocumentSupported: true,
+        clientMetadataUrl: "https://hub.example.com\\..\\client.json",
+      }),
+    ).toThrow(OAuthDiscoveryError);
+    expect(
+      clientRegistrationPlan({
+        clientIdMetadataDocumentSupported: true,
+        clientMetadataUrl: "https://HUB.example.com:443/oauth/client.json",
+      }),
+    ).toEqual({
+      mechanism: "client-id-metadata",
+      clientId: "https://hub.example.com/oauth/client.json",
+    });
+  });
 });
