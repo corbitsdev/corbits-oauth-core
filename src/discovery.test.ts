@@ -7,6 +7,7 @@ import {
   generateState,
   mcpClientConfig,
   OAuthDiscoveryError,
+  clientRegistrationPlan,
   registerMcpClient,
   selectMcpScopes,
   type FetchLike,
@@ -684,5 +685,53 @@ describe("mcpClientConfig scope selection", () => {
       wantRefresh: true,
     });
     expect(config.scopes).toEqual(["custom"]);
+  });
+});
+
+describe("clientRegistrationPlan", () => {
+  const metadataUrl = "https://hub.example.com/oauth/client.json";
+
+  test("prefers a pre-registered client over metadata documents and dynamic registration", () => {
+    // Load-bearing: a hub that already has a client id must not be forced
+    // through dynamic registration, and must not be rewritten to a metadata URL.
+    expect(
+      clientRegistrationPlan({
+        preRegisteredClientId: "  fixed-client  ",
+        clientIdMetadataDocumentSupported: true,
+        clientMetadataUrl: metadataUrl,
+        registrationEndpoint: "https://auth.example.com/register",
+      }),
+    ).toEqual({ mechanism: "pre-registered", clientId: "fixed-client" });
+  });
+
+  test("uses a metadata document when the server advertises it and no client id was supplied", () => {
+    expect(
+      clientRegistrationPlan({
+        clientIdMetadataDocumentSupported: true,
+        clientMetadataUrl: metadataUrl,
+      }),
+    ).toEqual({ mechanism: "client-id-metadata", clientId: metadataUrl });
+  });
+
+  test("falls back to dynamic registration and otherwise reports that none is available", () => {
+    expect(
+      clientRegistrationPlan({
+        registrationEndpoint: "https://auth.example.com/register",
+        clientMetadataUrl: metadataUrl,
+      }),
+    ).toEqual({
+      mechanism: "dynamic",
+      registrationEndpoint: "https://auth.example.com/register",
+    });
+    expect(clientRegistrationPlan({})).toBeUndefined();
+  });
+
+  test("rejects a metadata document URL that is not a plain https path", () => {
+    expect(() =>
+      clientRegistrationPlan({
+        clientIdMetadataDocumentSupported: true,
+        clientMetadataUrl: "https://hub.example.com/a/../client.json",
+      }),
+    ).toThrow(OAuthDiscoveryError);
   });
 });

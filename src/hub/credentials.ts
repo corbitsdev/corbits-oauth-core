@@ -32,6 +32,25 @@ export const OAUTH_RESOURCE_METADATA_KEY = "oauthResource";
 /** Everything the token writes below need — a `db` or an open transaction. */
 export type OAuthCredentialWriter = Pick<DB["db"], "update">;
 
+async function sealTokenSecrets(
+  cipher: CredentialCipher,
+  credentialId: string,
+  tokens: BaseTokens,
+): Promise<{ secret: string; refreshSecret: string | null }> {
+  const secret = await cipher.encrypt(
+    tokens.access,
+    credentialAad(credentialId, "secret"),
+  );
+  if (tokens.refresh === undefined) return { secret, refreshSecret: null };
+  return {
+    secret,
+    refreshSecret: await cipher.encrypt(
+      tokens.refresh,
+      credentialAad(credentialId, "refreshSecret"),
+    ),
+  };
+}
+
 export type WriteOAuthTokensOpts = {
   readonly db: OAuthCredentialWriter;
   readonly cipher: CredentialCipher;
@@ -51,13 +70,10 @@ export type WriteOAuthTokensOpts = {
 export async function writeOAuthTokens(
   opts: WriteOAuthTokensOpts,
 ): Promise<void> {
-  const secret = await opts.cipher.encrypt(
-    opts.tokens.access,
-    credentialAad(opts.credentialId, "secret"),
-  );
-  const refreshSecret = await opts.cipher.encrypt(
-    opts.tokens.refresh,
-    credentialAad(opts.credentialId, "refreshSecret"),
+  const sealed = await sealTokenSecrets(
+    opts.cipher,
+    opts.credentialId,
+    opts.tokens,
   );
   await opts.db
     .update(credential)
@@ -65,8 +81,8 @@ export async function writeOAuthTokens(
       ...(opts.providerId !== undefined ? { providerId: opts.providerId } : {}),
       ...(opts.scopes !== undefined ? { scopes: [...opts.scopes] } : {}),
       type: "oauth_token",
-      secret,
-      refreshSecret,
+      secret: sealed.secret,
+      refreshSecret: sealed.refreshSecret,
       expiresAt:
         opts.tokens.expiresAt === undefined
           ? null
@@ -203,14 +219,7 @@ export async function persistOAuthCredential(
     return credentialId;
   }
 
-  const secret = await opts.cipher.encrypt(
-    opts.tokens.access,
-    credentialAad(credentialId, "secret"),
-  );
-  const refreshSecret = await opts.cipher.encrypt(
-    opts.tokens.refresh,
-    credentialAad(credentialId, "refreshSecret"),
-  );
+  const sealed = await sealTokenSecrets(opts.cipher, credentialId, opts.tokens);
   const expiresAt =
     opts.tokens.expiresAt === undefined
       ? null
@@ -226,8 +235,8 @@ export async function persistOAuthCredential(
       name: opts.name,
       type: "oauth_token",
       description: null,
-      secret,
-      refreshSecret,
+      secret: sealed.secret,
+      refreshSecret: sealed.refreshSecret,
       scopes: [...opts.scopes],
       expiresAt,
       metadata,

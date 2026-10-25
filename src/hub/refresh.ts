@@ -6,6 +6,7 @@ import { and, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 
 import {
   baseTokensFromResponse,
+  OAuthMissingRefreshTokenError,
   OAuthTokenEndpointError,
   refreshTokenRequest,
   type BaseTokens,
@@ -117,10 +118,13 @@ function dueAt(expiresAt: Date | null, deadline: number): boolean {
 }
 
 // Only `invalid_grant` (RFC 6749 §5.2) means the refresh token itself is
-// dead and a fresh sign-in is the fix. Everything else — 429, 408, a 401
+// dead and a fresh sign-in is the fix. A grant that never had a refresh
+// token is the same outcome. Everything else — 429, 408, a 401
 // `invalid_client`, 5xx, network, decrypt — is retried on the next pass.
 function isReauthError(error: unknown): boolean {
+  if (error instanceof OAuthMissingRefreshTokenError) return true;
   if (!(error instanceof OAuthTokenEndpointError)) return false;
+  if (error.detail === "invalid_grant") return true;
   try {
     const body: unknown = JSON.parse(error.detail);
     return (
@@ -230,6 +234,8 @@ export function createOAuthRefreshStore(opts: {
           and(
             eq(credential.type, "oauth_token"),
             eq(credential.status, "active"),
+            // No refresh token was issued: there is nothing to redeem. The
+            // row stays until the host starts a new login; it is not due.
             isNotNull(credential.refreshSecret),
             isNotNull(credential.expiresAt),
             lte(credential.expiresAt, dueBefore),

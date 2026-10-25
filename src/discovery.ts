@@ -46,6 +46,7 @@ const AuthorizationServerMetadata = type({
   "token_endpoint_auth_methods_supported?": "string[]",
   "code_challenge_methods_supported?": "string[]",
   "authorization_response_iss_parameter_supported?": "boolean",
+  "client_id_metadata_document_supported?": "boolean",
 });
 
 // RFC 7591 §3.2.1 — registration response, narrowed to the assigned client id
@@ -71,6 +72,8 @@ export type McpAuthorizationServer = {
   // RFC 9207: when true, every authorization response carries `iss` and the
   // client must reject a redirect whose `iss` is not this issuer.
   authorizationResponseIssParameterSupported?: boolean;
+  /** OAuth Client ID Metadata Documents (MCP authorization). */
+  clientIdMetadataDocumentSupported?: boolean;
 };
 
 // A login entry derived from a resource URL: everything the host needs to
@@ -355,6 +358,12 @@ export async function discoverMcpLoginEntry(
               metadata.authorization_response_iss_parameter_supported,
           }
         : {}),
+      ...(metadata.client_id_metadata_document_supported !== undefined
+        ? {
+            clientIdMetadataDocumentSupported:
+              metadata.client_id_metadata_document_supported,
+          }
+        : {}),
     },
     ...(resourceScopesSupported !== undefined
       ? { resourceScopesSupported }
@@ -391,6 +400,73 @@ function grantedScope(
   requested: string | undefined,
 ): string | undefined {
   return echoed ?? requested;
+}
+
+function assertClientMetadataUrl(raw: string): void {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new OAuthDiscoveryError("client metadata URL is not absolute");
+  }
+  if (url.protocol !== "https:")
+    throw new OAuthDiscoveryError("client metadata URL must use https");
+  if (url.pathname === "" || url.pathname === "/")
+    throw new OAuthDiscoveryError("client metadata URL must contain a path");
+  if (url.hash !== "" || url.username !== "" || url.password !== "")
+    throw new OAuthDiscoveryError(
+      "client metadata URL must not contain a fragment or userinfo",
+    );
+  const afterScheme = raw.slice(raw.indexOf("://") + 3);
+  const pathStart = afterScheme.indexOf("/");
+  const rawPath =
+    pathStart === -1
+      ? ""
+      : (afterScheme.slice(pathStart).split(/[?#]/, 1)[0] ?? "");
+  if (rawPath.split("/").some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment)))
+    throw new OAuthDiscoveryError(
+      "client metadata URL must not contain dot segments",
+    );
+}
+
+/**
+ * How a resource login obtains a client id. A pre-registered id wins, then a
+ * Client ID Metadata Document when the server advertises it and the host
+ * supplied a document URL, then RFC 7591. `undefined` means none of those
+ * is available — dynamic registration is not required when another applies.
+ */
+export type ClientRegistrationPlan =
+  | { readonly mechanism: "pre-registered"; readonly clientId: string }
+  | { readonly mechanism: "client-id-metadata"; readonly clientId: string }
+  | { readonly mechanism: "dynamic"; readonly registrationEndpoint: string };
+
+export function clientRegistrationPlan(opts: {
+  readonly registrationEndpoint?: string;
+  readonly clientIdMetadataDocumentSupported?: boolean;
+  readonly clientMetadataUrl?: string;
+  readonly preRegisteredClientId?: string;
+}): ClientRegistrationPlan | undefined {
+  const preRegistered = opts.preRegisteredClientId?.trim();
+  if (preRegistered !== undefined && preRegistered.length > 0) {
+    return { mechanism: "pre-registered", clientId: preRegistered };
+  }
+  if (
+    opts.clientIdMetadataDocumentSupported === true &&
+    opts.clientMetadataUrl !== undefined
+  ) {
+    assertClientMetadataUrl(opts.clientMetadataUrl);
+    return {
+      mechanism: "client-id-metadata",
+      clientId: opts.clientMetadataUrl,
+    };
+  }
+  if (opts.registrationEndpoint !== undefined) {
+    return {
+      mechanism: "dynamic",
+      registrationEndpoint: opts.registrationEndpoint,
+    };
+  }
+  return undefined;
 }
 
 /**
