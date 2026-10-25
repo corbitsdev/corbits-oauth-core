@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildAuthorizeUrl,
   discoverMcpLoginEntry,
+  exchangeCode,
   generatePkce,
   generateState,
   mcpClientConfig,
@@ -22,6 +23,17 @@ const asMetadata = {
   token_endpoint: "https://auth.example.com/token",
   registration_endpoint: "https://auth.example.com/register",
   code_challenge_methods_supported: ["S256"],
+};
+
+// Fallback discovery fetches AS metadata using the resource URL as the issuer
+// identifier, so the document's issuer must be that URL (RFC 8414 §3.3) and
+// its endpoints must share the issuer origin.
+const fallbackAsMetadata = {
+  ...asMetadata,
+  issuer: resourceUrl,
+  authorization_endpoint: "https://mcp.example.com/authorize",
+  token_endpoint: "https://mcp.example.com/token",
+  registration_endpoint: "https://mcp.example.com/register",
 };
 
 // Real metadata (checked 2026-09-22) from two live MCP servers, used to keep
@@ -130,12 +142,12 @@ describe("MCP OAuth discovery", () => {
     const { fetchImpl } = fakeFetch({
       "https://mcp.example.com/.well-known/oauth-authorization-server/mcp": {
         status: 200,
-        body: asMetadata,
+        body: fallbackAsMetadata,
       },
     });
     const entry = await discoverMcpLoginEntry({ resourceUrl, fetchImpl });
     expect(entry.authorizationServer.tokenEndpoint).toBe(
-      "https://auth.example.com/token",
+      "https://mcp.example.com/token",
     );
   });
 
@@ -235,6 +247,133 @@ describe("MCP OAuth discovery", () => {
     ).rejects.toThrow(OAuthDiscoveryError);
   });
 
+  test("discards authorization-server metadata whose issuer is not the fetch issuer", async () => {
+    // Load-bearing: RFC 8414 §3.3. The callback compares `iss` to the issuer
+    // stored from this document. A different issuer would make that check
+    // agree with an authorization server we did not fetch.
+    const { fetchImpl } = fakeFetch({
+      "https://mcp.example.com/.well-known/oauth-protected-resource/mcp": {
+        status: 200,
+        body: {
+          resource: resourceUrl,
+          authorization_servers: ["https://auth.example.com"],
+        },
+      },
+      "https://auth.example.com/.well-known/oauth-authorization-server": {
+        status: 200,
+        body: {
+          ...asMetadata,
+          issuer: "https://honest.example",
+          authorization_endpoint: "https://honest.example/authorize",
+          token_endpoint: "https://honest.example/token",
+        },
+      },
+    });
+    const error = await discoverMcpLoginEntry({ resourceUrl, fetchImpl }).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(OAuthDiscoveryError);
+    expect(String(error)).not.toContain("honest.example");
+  });
+
+  test("does not exchange a code at a token endpoint on another origin", async () => {
+    // Load-bearing: a split document can name an honest issuer (so the
+    // callback `iss` matches) and put token_endpoint on an attacker origin.
+    // Accepting it would POST the code and code_verifier there.
+    const posts: { url: string; body: string }[] = [];
+    const honest = "https://honest.example";
+    const fetchImpl: FetchLike = Object.assign(
+      async (input: Parameters<FetchLike>[0], init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "POST") {
+          posts.push({ url, body: String(init.body ?? "") });
+          return new Response(JSON.stringify({ access_token: "stolen" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (
+          url ===
+          "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
+        ) {
+          return new Response(
+            JSON.stringify({
+              resource: resourceUrl,
+              authorization_servers: [honest],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url === `${honest}/.well-known/oauth-authorization-server`) {
+          return new Response(
+            JSON.stringify({
+              issuer: honest,
+              authorization_endpoint: `${honest}/authorize`,
+              token_endpoint: "https://evil.example/token",
+              code_challenge_methods_supported: ["S256"],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      },
+      { preconnect: () => undefined },
+    );
+    let discovered: McpLoginEntry | undefined;
+    let failure: unknown;
+    try {
+      discovered = await discoverMcpLoginEntry({ resourceUrl, fetchImpl });
+    } catch (cause) {
+      failure = cause;
+    }
+    if (discovered !== undefined) {
+      await exchangeCode(
+        mcpClientConfig(discovered, {
+          clientId: "client",
+          redirectUri: "https://hub.example.com/callback",
+        }),
+        "the-code",
+        "the-verifier",
+        fetchImpl,
+      ).catch(() => undefined);
+    }
+    expect(failure).toBeInstanceOf(OAuthDiscoveryError);
+    expect(posts).toEqual([]);
+    expect(String(failure)).not.toContain("evil.example");
+    expect(String(failure)).not.toContain("the-verifier");
+  });
+
+  test("rejects an authorization endpoint on another origin than the issuer", async () => {
+    // Load-bearing: the same mix-up applies to the authorize URL. The user
+    // would grant a code at the attacker while `iss` still matches.
+    const honest = "https://honest.example";
+    const { fetchImpl } = fakeFetch({
+      "https://mcp.example.com/.well-known/oauth-protected-resource/mcp": {
+        status: 200,
+        body: {
+          resource: resourceUrl,
+          authorization_servers: [honest],
+        },
+      },
+      [`${honest}/.well-known/oauth-authorization-server`]: {
+        status: 200,
+        body: {
+          issuer: honest,
+          authorization_endpoint: "https://evil.example/authorize",
+          token_endpoint: `${honest}/token`,
+          code_challenge_methods_supported: ["S256"],
+        },
+      },
+    });
+    const error = await discoverMcpLoginEntry({ resourceUrl, fetchImpl }).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(OAuthDiscoveryError);
+    expect(String(error)).not.toContain("evil.example");
+  });
+
   test("refuses an authorization server that omits code_challenge_methods_supported", async () => {
     // Load-bearing: MCP spec "Security Considerations" — absence means the
     // server does not support PKCE and the client MUST refuse to proceed
@@ -242,7 +381,7 @@ describe("MCP OAuth discovery", () => {
     const {
       code_challenge_methods_supported: _unused,
       ...metadataWithoutPkce
-    } = asMetadata;
+    } = fallbackAsMetadata;
     const { fetchImpl } = fakeFetch({
       "https://mcp.example.com/.well-known/oauth-authorization-server/mcp": {
         status: 200,
@@ -260,7 +399,10 @@ describe("MCP OAuth discovery", () => {
     const { fetchImpl } = fakeFetch({
       "https://mcp.example.com/.well-known/oauth-authorization-server/mcp": {
         status: 200,
-        body: { ...asMetadata, code_challenge_methods_supported: ["plain"] },
+        body: {
+          ...fallbackAsMetadata,
+          code_challenge_methods_supported: ["plain"],
+        },
       },
     });
     await expect(
@@ -276,7 +418,7 @@ describe("MCP OAuth discovery", () => {
       "https://mcp.example.com/.well-known/oauth-authorization-server/mcp": {
         status: 200,
         body: {
-          ...asMetadata,
+          ...fallbackAsMetadata,
           token_endpoint_auth_methods_supported: ["client_secret_basic"],
         },
       },

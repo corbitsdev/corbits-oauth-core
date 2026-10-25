@@ -22,6 +22,7 @@ import {
   type OAuthLoginHandle,
   type OAuthClientConfig,
 } from "../index.js";
+import { assertEndpointOnIssuer } from "../discovery.js";
 import {
   checkOAuthCredentialTarget,
   OAUTH_CLIENT_ID_METADATA_KEY,
@@ -296,16 +297,24 @@ export function mountOAuthLogin(
         clientId,
         redirectUri,
       });
+      const issuer = entry.authorizationServer.issuer;
+      assertEndpointOnIssuer(
+        issuer,
+        config.authorizeUrl,
+        "authorization_endpoint",
+      );
       return {
         flow: {
           provider: new URL(entry.resourceUrl).origin,
           config,
-          exchange: async (code, verifier, now) =>
-            baseTokensFromResponse(
+          exchange: async (code, verifier, now) => {
+            assertEndpointOnIssuer(issuer, config.tokenUrl, "token_endpoint");
+            return baseTokensFromResponse(
               await exchangeCode(config, code, verifier, opts.fetchImpl),
               now,
               undefined,
-            ),
+            );
+          },
           metadata: () => ({
             [OAUTH_CLIENT_ID_METADATA_KEY]: clientId,
             [OAUTH_TOKEN_URL_METADATA_KEY]: config.tokenUrl,

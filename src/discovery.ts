@@ -258,6 +258,43 @@ function assertSupportsPublicClients(
     );
 }
 
+// RFC 8414 §3.3: the issuer value in the document must be the identifier the
+// well-known URL was built from. Anything else is discarded.
+function assertFetchedIssuer(
+  asMetadataUrl: string,
+  fetchIssuer: string,
+  metadataIssuer: string,
+): void {
+  if (metadataIssuer !== fetchIssuer)
+    throw new OAuthDiscoveryError(
+      `authorization-server metadata at ${asMetadataUrl} issuer does not match the issuer identifier used to retrieve it.`,
+    );
+}
+
+// The authorization and token endpoints are used with that issuer. A document
+// that points either at another origin is a mix-up: the code and verifier
+// would be posted to the foreign token endpoint.
+export function assertEndpointOnIssuer(
+  issuer: string,
+  endpoint: string,
+  field: "authorization_endpoint" | "token_endpoint",
+): void {
+  let issuerUrl: URL;
+  let endpointUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+    endpointUrl = new URL(endpoint);
+  } catch {
+    throw new OAuthDiscoveryError(
+      `authorization server metadata ${field} is not a valid URL.`,
+    );
+  }
+  if (endpointUrl.origin !== issuerUrl.origin)
+    throw new OAuthDiscoveryError(
+      `authorization server metadata ${field} origin does not match the issuer.`,
+    );
+}
+
 // Resolve the authorization server for a resource URL: protected-resource
 // metadata first (RFC 9728), falling back to authorization-server metadata
 // served directly at the resource (RFC 8414 §3.1) for servers that skip the
@@ -304,11 +341,10 @@ export async function discoverMcpLoginEntry(
   }
 
   // No protected-resource document: the resource itself may serve
-  // authorization-server metadata (some MCP servers do).
-  const asMetadataUrl =
-    issuer === undefined
-      ? wellKnownUrl(resourceUrl, "oauth-authorization-server")
-      : wellKnownUrl(issuer, "oauth-authorization-server");
+  // authorization-server metadata (some MCP servers do). The URL the
+  // well-known suffix is inserted into is the issuer RFC 8414 compares.
+  const fetchIssuer = issuer ?? resourceUrl;
+  const asMetadataUrl = wellKnownUrl(fetchIssuer, "oauth-authorization-server");
   const asRes = await getJson(asMetadataUrl, fetchImpl, timeoutMs);
   if (!asRes.ok) throw badStatus(asMetadataUrl, asRes.status);
   const metadata = AuthorizationServerMetadata(
@@ -318,6 +354,18 @@ export async function discoverMcpLoginEntry(
     throw new OAuthDiscoveryError(
       `authorization-server metadata at ${asMetadataUrl} is malformed: ${metadata.summary}`,
     );
+
+  assertFetchedIssuer(asMetadataUrl, fetchIssuer, metadata.issuer);
+  assertEndpointOnIssuer(
+    metadata.issuer,
+    metadata.authorization_endpoint,
+    "authorization_endpoint",
+  );
+  assertEndpointOnIssuer(
+    metadata.issuer,
+    metadata.token_endpoint,
+    "token_endpoint",
+  );
 
   assertSupportsS256(asMetadataUrl, metadata.code_challenge_methods_supported);
   assertSupportsPublicClients(
