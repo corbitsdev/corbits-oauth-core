@@ -1,7 +1,7 @@
 import { type } from "arktype";
 
 import type { Pkce } from "./pkce.js";
-import type { BaseTokens } from "./tokens.js";
+import { presentRefreshToken, type BaseTokens } from "./tokens.js";
 
 // Provider-agnostic OAuth client config. Endpoints, client id, scopes, and
 // timeouts are supplied by the caller; this module owns only the shared
@@ -121,9 +121,9 @@ export class OAuthMissingRefreshTokenError extends Error {
  * Convert a token response to the shared base token fields. `now` is
  * injectable so callers (and tests) control the expiry baseline;
  * `previousRefresh` is carried forward when a refresh response omits a new
- * refresh_token (servers may rotate or not). When neither is present the
- * result simply has no `refresh`: an access-token-only grant is valid and
- * must not be rejected or padded with a made-up refresh token.
+ * refresh_token (servers may rotate or not). A blank refresh token is absent,
+ * the same as an omitted one. When neither the response nor the previous
+ * grant has a usable refresh token, the result simply has no `refresh`.
  *
  * `expires_in` is RECOMMENDED, not required, on a token response (RFC 6749
  * §5.1). When a server omits it there is no spec-defined lifetime to fall
@@ -135,7 +135,9 @@ export function baseTokensFromResponse(
   now: number,
   previousRefresh: string | undefined,
 ): BaseTokens {
-  const refresh = response.refresh_token ?? previousRefresh;
+  const refresh =
+    presentRefreshToken(response.refresh_token) ??
+    presentRefreshToken(previousRefresh);
   return {
     access: response.access_token,
     ...(refresh !== undefined ? { refresh } : {}),
@@ -225,7 +227,17 @@ async function postToken(
   const json = TokenResponse(payload);
   if (json instanceof type.errors)
     throw new OAuthTokenResponseSchemaError(json.summary);
-  return json;
+  return omitBlankRefresh(json);
+}
+
+// `refresh_token: ""` parses as a string, but it is not a credential. Drop it
+// at the boundary so later stages see the same shape as an omitted field.
+function omitBlankRefresh(response: TokenResponse): TokenResponse {
+  if (presentRefreshToken(response.refresh_token) !== undefined)
+    return response;
+  if (response.refresh_token === undefined) return response;
+  const { refresh_token: _blank, ...rest } = response;
+  return rest;
 }
 
 /**
@@ -258,6 +270,8 @@ export async function refreshTokenRequest(
   refreshToken: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<TokenResponse> {
+  if (presentRefreshToken(refreshToken) === undefined)
+    throw new OAuthMissingRefreshTokenError();
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,

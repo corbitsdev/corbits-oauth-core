@@ -8,7 +8,7 @@ import { generateId } from "@intx/hub-common";
 import { credentialAad, type CredentialCipher } from "@intx/types";
 import { and, eq } from "drizzle-orm";
 
-import type { BaseTokens } from "../index.js";
+import { presentRefreshToken, type BaseTokens } from "../tokens.js";
 
 /**
  * Credential-metadata key naming the registered provider the tokens were
@@ -41,11 +41,12 @@ async function sealTokenSecrets(
     tokens.access,
     credentialAad(credentialId, "secret"),
   );
-  if (tokens.refresh === undefined) return { secret, refreshSecret: null };
+  const refresh = presentRefreshToken(tokens.refresh);
+  if (refresh === undefined) return { secret, refreshSecret: null };
   return {
     secret,
     refreshSecret: await cipher.encrypt(
-      tokens.refresh,
+      refresh,
       credentialAad(credentialId, "refreshSecret"),
     ),
   };

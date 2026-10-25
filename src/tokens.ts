@@ -2,8 +2,8 @@
 // (Interchange `oauth_token` credential, OS vault, or otherwise).
 //
 // `refresh` is optional because an authorization server may issue an access
-// token and no refresh token (RFC 6749 §5.1). Absence means a new
-// authorization is required at expiry — this package does not invent one.
+// token and no refresh token (RFC 6749 §5.1). A blank value is the same
+// absence: it is not a credential and must not be stored or redeemed.
 //
 // `expiresAt` is optional because RFC 6749 §5.1 makes `expires_in` RECOMMENDED,
 // not required — a token endpoint may omit it, and this package refuses to
@@ -21,3 +21,16 @@ export type AuthProfile<TTokens extends BaseTokens> = {
   tokens: TTokens;
   createdAt: number;
 };
+
+/**
+ * A refresh token the caller can redeem. Missing, null, and whitespace-only
+ * values are absent — `""` and `" "` must not be stored or sent as if they
+ * were a credential.
+ */
+export function presentRefreshToken(
+  token: string | null | undefined,
+): string | undefined {
+  if (token == null) return undefined;
+  if (token.trim().length === 0) return undefined;
+  return token;
+}

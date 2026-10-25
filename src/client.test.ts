@@ -4,8 +4,10 @@ import {
   baseTokensFromResponse,
   buildAuthorizeUrl,
   exchangeCode,
+  OAuthMissingRefreshTokenError,
   OAuthTokenEndpointError,
   OAuthTokenResponseSchemaError,
+  refreshTokenRequest,
   type FetchLike,
   type OAuthClientConfig,
 } from "./index.js";
@@ -93,6 +95,59 @@ describe("OAuth client — hostile token responses", () => {
     );
     expect(tokens.access).toBe("access-only");
     expect(tokens.refresh).toBeUndefined();
+  });
+
+  test("treats a blank refresh token as absent, including one carried forward", () => {
+    // Load-bearing: `""` and `" "` are strings, so a nullish check stores and
+    // later redeems them. A blank value is not a credential.
+    for (const refresh of ["", " "]) {
+      const tokens = baseTokensFromResponse(
+        { access_token: "access-kept", refresh_token: refresh },
+        0,
+        refresh,
+      );
+      expect(tokens.refresh).toBeUndefined();
+    }
+    const kept = baseTokensFromResponse(
+      { access_token: "access-kept", refresh_token: " " },
+      0,
+      "prior-refresh",
+    );
+    expect(kept.refresh).toBe("prior-refresh");
+  });
+
+  test("parses a blank refresh_token off the token response", async () => {
+    const response = await exchangeCode(
+      config,
+      "auth-code",
+      "verifier",
+      fakeFetch({
+        access_token: "access-kept",
+        refresh_token: "",
+        expires_in: 60,
+      }),
+    );
+    expect(response.refresh_token).toBeUndefined();
+    expect(response.access_token).toBe("access-kept");
+  });
+
+  test("does not post a blank refresh token", async () => {
+    let calls = 0;
+    const impl: FetchLike = async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({ access_token: "access-must-not-leak" }),
+        { status: 200 },
+      );
+    };
+    impl.preconnect = () => undefined;
+    const error = await refreshTokenRequest(config, " ", impl).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(calls).toBe(0);
+    expect(error).toBeInstanceOf(OAuthMissingRefreshTokenError);
+    expect(String(error)).not.toContain("access-must-not-leak");
   });
 });
 

@@ -37,4 +37,39 @@ describe("writeOAuthTokens", () => {
       { secret: "sealed:access-only", refreshSecret: null },
     ]);
   });
+
+  test("does not seal a blank refresh token", async () => {
+    // Load-bearing: `""` and `" "` are strings, so they would be encrypted and
+    // later selected for refresh. Blank is the same as no refresh token.
+    const encrypted: string[] = [];
+    const cipherWithLog: CredentialCipher = {
+      encrypt: (plaintext) => {
+        encrypted.push(plaintext);
+        return Promise.resolve(`sealed:${plaintext}`);
+      },
+      decrypt: () => Promise.reject(new Error("unused")),
+    };
+    const written: { refreshSecret: string | null }[] = [];
+    const db = {
+      update: () => ({
+        set: (values: { refreshSecret: string | null }) => ({
+          where: () => {
+            written.push({ refreshSecret: values.refreshSecret });
+            return Promise.resolve();
+          },
+        }),
+      }),
+    };
+    for (const refresh of ["", " "]) {
+      await writeOAuthTokens({
+        db: db as unknown as OAuthCredentialWriter,
+        cipher: cipherWithLog,
+        credentialId: "cred_1",
+        tokens: { access: "access-kept", refresh },
+        metadata: {},
+      });
+    }
+    expect(written).toEqual([{ refreshSecret: null }, { refreshSecret: null }]);
+    expect(encrypted).toEqual(["access-kept", "access-kept"]);
+  });
 });

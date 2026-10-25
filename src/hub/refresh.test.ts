@@ -26,6 +26,7 @@ function fakeStore(row: {
   provider: string;
   expiresAt: Date | null;
   metadata?: Record<string, string>;
+  refreshSecret?: string;
 }) {
   const written: { tokens: BaseTokens; metadata: Record<string, string> }[] =
     [];
@@ -40,7 +41,7 @@ function fakeStore(row: {
         id: row.id,
         tenantId: row.tenantId,
         expiresAt: row.expiresAt,
-        refreshSecret: "refresh-token",
+        refreshSecret: row.refreshSecret ?? "refresh-token",
         metadata: row.metadata ?? {},
       });
       if (result === null) return false;
@@ -178,6 +179,37 @@ describe("createRefreshTicker", () => {
     });
     expect(written).toEqual([]);
     expect(errors).toEqual([]);
+  });
+
+  it("does not refresh a blank refresh token", async () => {
+    // Load-bearing: an encrypted `""` or `" "` is non-null, so listDue would
+    // select it and the ticker would redeem it. Blank is not a credential,
+    // and the skip must not disclose an access token.
+    const access = "access-must-not-leak";
+    for (const refreshSecret of ["", " "]) {
+      const { store, written } = fakeStore({
+        id: "cred_1",
+        tenantId: "tenant_1",
+        provider: "acme",
+        expiresAt: new Date(Date.now() + MINUTE),
+        refreshSecret,
+      });
+      const calls: string[] = [];
+      const errors: unknown[] = [];
+      await tickOnce(store, {
+        providers: providers(() => {
+          calls.push(access);
+          return Promise.resolve({ access, refresh: "next" });
+        }),
+        marginMs: 10 * MINUTE,
+        onError: (error) => {
+          errors.push(error);
+        },
+      });
+      expect(calls).toEqual([]);
+      expect(written).toEqual([]);
+      expect(errors.map(String).join("\n")).not.toContain(access);
+    }
   });
 });
 

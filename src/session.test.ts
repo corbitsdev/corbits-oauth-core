@@ -69,4 +69,39 @@ describe("Token session createTokenSession — refresh coalescing", () => {
     ).toBeInstanceOf(OAuthMissingRefreshTokenError);
     expect(refreshCount).toBe(0);
   });
+
+  test("treats a blank refresh token as absent and does not disclose the access token", async () => {
+    // Load-bearing: `""` and `" "` are present to a nullish check, so expiry
+    // would redeem them. The failure must not echo the access token.
+    const access = "access-must-not-leak";
+    for (const refresh of ["", " "]) {
+      let refreshCount = 0;
+      const stored: { tokens: BaseTokens } = {
+        tokens: { access, refresh, expiresAt: 1_000 },
+      };
+      const session = createTokenSession<BaseTokens, string>({
+        skewMs: 0,
+        loadProfile: async () => stored,
+        updateTokens: async () => undefined,
+        refreshTokens: async () => {
+          refreshCount += 1;
+          return { access: "should-not-run" };
+        },
+        toAccess: (tokens) => tokens.access,
+      });
+      const error = await session.getValidToken("p", 1_000).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(OAuthRefreshFailedError);
+      expect(
+        error instanceof OAuthRefreshFailedError ? error.cause : undefined,
+      ).toBeInstanceOf(OAuthMissingRefreshTokenError);
+      expect(refreshCount).toBe(0);
+      expect(String(error)).not.toContain(access);
+      expect(error instanceof Error ? String(error.cause) : "").not.toContain(
+        access,
+      );
+    }
+  });
 });
