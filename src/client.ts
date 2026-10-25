@@ -42,11 +42,6 @@ const PROTECTED_AUTHORIZE_PARAMS = new Set([
  * Build the authorization URL the user opens to grant access. The challenge
  * binds this request to the PKCE verifier held locally; `state` is the CSRF
  * nonce the redirect must echo back unchanged.
- *
- * Caller `extraAuthorizeParams` are applied first and cannot replace the
- * protected fields this function sets (PKCE, state, client, redirect, scope,
- * resource, response type). An empty scope list omits `scope` rather than
- * sending an empty value that would override the server default.
  */
 export function buildAuthorizeUrl(
   config: OAuthClientConfig,
@@ -188,14 +183,6 @@ function errorCodeFromPrefix(body: string): string | undefined {
   return undefined;
 }
 
-function isRedirectResponse(res: Response): boolean {
-  return (
-    res.type === "opaqueredirect" ||
-    res.redirected ||
-    (res.status >= 300 && res.status < 400)
-  );
-}
-
 // `fetchImpl` is a required parameter here, not defaulted to the global —
 // only the exported entry points (exchangeCode, refreshTokenRequest) default
 // to the real `fetch`; an internal helper reaching for the global itself
@@ -222,7 +209,11 @@ async function postToken(
     redirect: "manual",
     signal: AbortSignal.timeout(config.tokenTimeoutMs),
   });
-  if (isRedirectResponse(res)) {
+  if (
+    res.type === "opaqueredirect" ||
+    res.redirected ||
+    (res.status >= 300 && res.status < 400)
+  ) {
     throw new OAuthTokenEndpointError(res.status, "redirect_refused");
   }
   if (!res.ok) {

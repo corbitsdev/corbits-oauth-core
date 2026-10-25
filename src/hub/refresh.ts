@@ -236,8 +236,7 @@ export function createOAuthRefreshStore(opts: {
           and(
             eq(credential.type, "oauth_token"),
             eq(credential.status, "active"),
-            // No refresh token was issued: there is nothing to redeem. The
-            // row stays until the host starts a new login; it is not due.
+            // Access-token-only rows have nothing to redeem, so they are not due.
             isNotNull(credential.refreshSecret),
             isNotNull(credential.expiresAt),
             lte(credential.expiresAt, dueBefore),

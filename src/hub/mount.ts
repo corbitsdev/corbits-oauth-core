@@ -98,12 +98,7 @@ export function mountOAuthCallback(
   opts: { readonly store: OAuthLoginStore; readonly path?: string },
 ): void {
   app.get(opts.path ?? "/oauth/callback", (c) => {
-    const query = (key: string): string | undefined => {
-      const values = c.req.queries(key);
-      return values === undefined || values.length === 0
-        ? undefined
-        : values[0];
-    };
+    const query = (key: string): string | undefined => c.req.queries(key)?.[0];
     const repeated = [
       "state",
       "code",
@@ -252,21 +247,11 @@ export function mountOAuthLogin(
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
       });
       const plan = clientRegistrationPlan({
-        ...(entry.authorizationServer.registrationEndpoint !== undefined
-          ? {
-              registrationEndpoint:
-                entry.authorizationServer.registrationEndpoint,
-            }
-          : {}),
-        ...(entry.authorizationServer.clientIdMetadataDocumentSupported === true
-          ? { clientIdMetadataDocumentSupported: true }
-          : {}),
-        ...(opts.clientMetadataUrl !== undefined
-          ? { clientMetadataUrl: opts.clientMetadataUrl }
-          : {}),
-        ...(body.clientId !== undefined
-          ? { preRegisteredClientId: body.clientId }
-          : {}),
+        registrationEndpoint: entry.authorizationServer.registrationEndpoint,
+        clientIdMetadataDocumentSupported:
+          entry.authorizationServer.clientIdMetadataDocumentSupported,
+        clientMetadataUrl: opts.clientMetadataUrl,
+        preRegisteredClientId: body.clientId,
       });
       if (plan === undefined) {
         return {

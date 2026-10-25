@@ -14,10 +14,7 @@ export type CallbackParams = {
   errorDescription?: string | undefined;
   /** RFC 9207 issuer identifier, when the authorization server sends one. */
   iss?: string | undefined;
-  /**
-   * A callback parameter was repeated. Refused before `code` or `error` is
-   * acted on, so a duplicated field cannot pick which value wins.
-   */
+  /** Repeated query parameter. Refused before `code` or `error` is used. */
   repeatedParameter?: boolean;
 };
 
@@ -114,10 +111,8 @@ export function createRouteCallbacks(): RouteCallbacks {
         });
         return { status: 400, html: signInFailedHtml(failure) };
       };
-      // Provenance before the grant: a repeated parameter, or an `iss` that
-      // is not the issuer recorded with this state, is not this login's
-      // redirect. RFC 9207 §2.4 — a present `iss` is always compared; a
-      // missing one is refused only when the server advertised it.
+      // RFC 9207: a present `iss` must be the issuer stored with this state.
+      // A missing `iss` fails only when the server advertised the parameter.
       if (repeatedParameter === true) return failed({ code: "state_mismatch" });
       if (entry.expectedIssuer !== undefined) {
         if (iss === undefined) {

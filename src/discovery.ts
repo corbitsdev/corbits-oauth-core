@@ -488,7 +488,7 @@ function canonicalClientMetadataUrl(raw: string): string {
  * How a resource login obtains a client id. A pre-registered id wins, then a
  * Client ID Metadata Document when the server advertises it and the host
  * supplied a document URL, then RFC 7591. `undefined` means none of those
- * is available — dynamic registration is not required when another applies.
+ * is available.
  */
 export type ClientRegistrationPlan =
   | { readonly mechanism: "pre-registered"; readonly clientId: string }
@@ -496,13 +496,13 @@ export type ClientRegistrationPlan =
   | { readonly mechanism: "dynamic"; readonly registrationEndpoint: string };
 
 export function clientRegistrationPlan(opts: {
-  readonly registrationEndpoint?: string;
-  readonly clientIdMetadataDocumentSupported?: boolean;
-  readonly clientMetadataUrl?: string;
-  readonly preRegisteredClientId?: string;
+  readonly registrationEndpoint?: string | undefined;
+  readonly clientIdMetadataDocumentSupported?: boolean | undefined;
+  readonly clientMetadataUrl?: string | undefined;
+  readonly preRegisteredClientId?: string | undefined;
 }): ClientRegistrationPlan | undefined {
   const preRegistered = opts.preRegisteredClientId?.trim();
-  if (preRegistered !== undefined && preRegistered.length > 0) {
+  if (preRegistered) {
     return { mechanism: "pre-registered", clientId: preRegistered };
   }
   if (
