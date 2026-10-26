@@ -12,8 +12,10 @@ OAuth 2.0 authorization-code login with PKCE and a loopback callback, in the Cor
 ## Install
 
 ```sh
-bun add @corbits/oauth-core
+bun add @corbits/oauth-core@0.3.3
 ```
+
+This release is `@corbits/oauth-core@0.3.3`. MCP pairing is [`@corbits/mcp@0.4.0`](https://github.com/corbitsdev/corbits-mcp), which calls this package for the login.
 
 This installs `@intx/db`, `@intx/hub-api`, `@intx/hub-common`, `@intx/types`, `drizzle-orm` and `hono` as dependencies. Only the `@corbits/oauth-core/hub` entry imports them, so browser and CLI bundles built from the root entry do not include them.
 
@@ -63,7 +65,7 @@ The callback server binds only loopback addresses (`127.0.0.0/8` or `::1`) on th
 - **CLI or desktop host:** the root entry. The host keeps profiles in its own store (an OS keychain, an encrypted file).
 - **Interchange hub** (`@intx/hub-api`, `@intx/db`, `@intx/types`): the `/hub` entry mounts login routes and refreshes `oauth_token` credentials that an `InferenceSource` names by `credentialId`.
 - **Providers:** a provider package or the host itself supplies an `OAuthLoginProvider`.
-- **MCP servers:** `discoverMcpLoginEntry` builds the `OAuthClientConfig` for servers that publish their authorization server instead of a fixed client.
+- **MCP servers:** pairs with [`@corbits/mcp@0.4.0`](https://github.com/corbitsdev/corbits-mcp). `discoverMcpLoginEntry` builds the `OAuthClientConfig` for servers that publish their authorization server instead of a fixed client.
 
 ## Reference
 
@@ -99,6 +101,10 @@ The callback server binds only loopback addresses (`127.0.0.0/8` or `::1`) on th
 A resource-URL login discovers the server's authorization server and obtains a client id from a pre-registered `clientId`, a Client ID Metadata Document URL (`clientMetadataUrl`, only when the server advertises it), or dynamic client registration. It stores that client id, the token URL and the resource on the credential, so the refresher renews a credential that has a refresh token without a registry entry. An access token issued with no refresh token is stored without one; the refresher skips that row, and a new login is required when it expires. It needs the mount's `callbackUrl` and `store` options (below). The PKCE verifier never leaves the hub process.
 
 What the callback route relies on: PKCE S256 is required of the server (discovery refuses one that does not advertise it); the `state` is 32 random bytes, single-use and bound to the tenant and principal that started the login; the RFC 8707 `resource` goes on the authorize, exchange and refresh requests; the discovered issuer is recorded with that state, a present `iss` must match it, and a missing `iss` is refused only when the server advertises RFC 9207; caller authorize extras cannot replace PKCE, state, or the other protected fields; token requests do not follow redirects and do not put response bodies in errors; the page is served `no-store` / `no-referrer`; and `callbackUrl` must be `https` unless it is loopback (`localhost`, `127.x`, `::1`), which is what local development uses.
+
+In 0.3.3, authorization and token endpoint origins must match the issuer that was fetched. A document that points the token endpoint at a different origin is rejected before the code and PKCE verifier are posted. A blank or whitespace refresh token is treated as absent. The refresher does not call the token endpoint for it. A long `invalid_grant` body still retires the credential (the row is marked `error`). The `error_description` is not copied into the public error. Client ID Metadata URLs are stored as one canonical URL. Backslash dot-segments are rejected.
+
+The loopback callback from `startCallbackServer` still does not check `iss`, because that path has no discovered issuer. The hub callback does.
 
 ## Using with Interchange
 
