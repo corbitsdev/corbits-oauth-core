@@ -1,7 +1,7 @@
 import { type } from "arktype";
 
 import type { Pkce } from "./pkce.js";
-import type { BaseTokens } from "./tokens.js";
+import { presentRefreshToken, type BaseTokens } from "./tokens.js";
 
 // Provider-agnostic OAuth client config. Endpoints, client id, scopes, and
 // timeouts are supplied by the caller; this module owns only the shared
@@ -27,6 +27,17 @@ export type TokenEndpointConfig = Pick<
   "clientId" | "tokenUrl" | "tokenTimeoutMs" | "resource"
 >;
 
+const PROTECTED_AUTHORIZE_PARAMS = new Set([
+  "response_type",
+  "client_id",
+  "redirect_uri",
+  "scope",
+  "code_challenge",
+  "code_challenge_method",
+  "state",
+  "resource",
+]);
+
 /**
  * Build the authorization URL the user opens to grant access. The challenge
  * binds this request to the PKCE verifier held locally; `state` is the CSRF
@@ -38,20 +49,22 @@ export function buildAuthorizeUrl(
   state: string,
 ): string {
   const url = new URL(config.authorizeUrl);
+  if (config.extraAuthorizeParams !== undefined) {
+    for (const [key, value] of Object.entries(config.extraAuthorizeParams)) {
+      if (PROTECTED_AUTHORIZE_PARAMS.has(key)) continue;
+      url.searchParams.set(key, value);
+    }
+  }
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", config.redirectUri);
-  url.searchParams.set("scope", config.scopes.join(" "));
+  const scope = config.scopes.filter((item) => item.length > 0).join(" ");
+  if (scope.length > 0) url.searchParams.set("scope", scope);
   url.searchParams.set("code_challenge", pkce.challenge);
   url.searchParams.set("code_challenge_method", pkce.method);
   url.searchParams.set("state", state);
   if (config.resource !== undefined) {
     url.searchParams.set("resource", config.resource);
-  }
-  if (config.extraAuthorizeParams !== undefined) {
-    for (const [key, value] of Object.entries(config.extraAuthorizeParams)) {
-      url.searchParams.set(key, value);
-    }
   }
   return url.toString();
 }
@@ -91,12 +104,10 @@ export class OAuthTokenResponseSchemaError extends Error {
   }
 }
 
-// No refresh token was present in the response or carried forward from a prior one.
+// No refresh token was present where a refresh was required.
 export class OAuthMissingRefreshTokenError extends Error {
   constructor() {
-    super(
-      "OAuth token response carried no refresh_token and none was previously stored.",
-    );
+    super("OAuth grant has no refresh token; a new authorization is required.");
     this.name = "OAuthMissingRefreshTokenError";
   }
 }
@@ -105,7 +116,9 @@ export class OAuthMissingRefreshTokenError extends Error {
  * Convert a token response to the shared base token fields. `now` is
  * injectable so callers (and tests) control the expiry baseline;
  * `previousRefresh` is carried forward when a refresh response omits a new
- * refresh_token (servers may rotate or not).
+ * refresh_token (servers may rotate or not). A blank refresh token is absent,
+ * the same as an omitted one. When neither the response nor the previous
+ * grant has a usable refresh token, the result simply has no `refresh`.
  *
  * `expires_in` is RECOMMENDED, not required, on a token response (RFC 6749
  * §5.1). When a server omits it there is no spec-defined lifetime to fall
@@ -117,11 +130,12 @@ export function baseTokensFromResponse(
   now: number,
   previousRefresh: string | undefined,
 ): BaseTokens {
-  const refresh = response.refresh_token ?? previousRefresh;
-  if (refresh === undefined) throw new OAuthMissingRefreshTokenError();
+  const refresh =
+    presentRefreshToken(response.refresh_token) ??
+    presentRefreshToken(previousRefresh);
   return {
     access: response.access_token,
-    refresh,
+    ...(refresh !== undefined ? { refresh } : {}),
     ...(response.expires_in !== undefined
       ? { expiresAt: now + response.expires_in * 1000 }
       : {}),
@@ -130,6 +144,44 @@ export function baseTokensFromResponse(
 
 // `fetch` implementation to use for token requests; injectable for tests.
 export type FetchLike = typeof fetch;
+
+// OAuth error codes are a small token (RFC 6749 §5.2). Anything else in a
+// token response body can be a secret and must not be copied into an Error.
+const OAUTH_ERROR_CODE = /^[a-z0-9_]{1,64}$/;
+
+function oauthErrorCode(body: string): string {
+  const parsed = errorCodeFromJson(body) ?? errorCodeFromPrefix(body);
+  return parsed ?? "";
+}
+
+function errorCodeFromJson(body: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "error" in parsed &&
+      typeof parsed.error === "string" &&
+      OAUTH_ERROR_CODE.test(parsed.error)
+    ) {
+      return parsed.error;
+    }
+  } catch {
+    // Truncated or non-JSON bodies fall through to a prefix scan. The scan
+    // still returns only the error code, never error_description.
+  }
+  return undefined;
+}
+
+// A long error_description used to be sliced to 4096 bytes before JSON.parse,
+// so the object no longer parsed and invalid_grant was dropped. The code is a
+// small token and can be read without the rest of the document.
+function errorCodeFromPrefix(body: string): string | undefined {
+  const match = /"error"\s*:\s*"([a-z0-9_]{1,64})"/.exec(body);
+  const code = match?.[1];
+  if (code !== undefined && OAUTH_ERROR_CODE.test(code)) return code;
+  return undefined;
+}
 
 // `fetchImpl` is a required parameter here, not defaulted to the global —
 // only the exported entry points (exchangeCode, refreshTokenRequest) default
@@ -143,6 +195,10 @@ async function postToken(
   // Refresh can run on a hot path outside any surrounding timer, so the
   // token request must abort within the bounded timeout rather than hang
   // the caller forever when the endpoint stalls.
+  //
+  // `redirect: "manual"` is load-bearing: the body carries an authorization
+  // code or refresh token, and the default follow mode would replay it at
+  // the Location (RFC 9700). A 3xx is a failure and its body is not read.
   const res = await fetchImpl(config.tokenUrl, {
     method: "POST",
     headers: {
@@ -150,14 +206,22 @@ async function postToken(
       accept: "application/json",
     },
     body: body.toString(),
+    redirect: "manual",
     signal: AbortSignal.timeout(config.tokenTimeoutMs),
   });
+  if (
+    res.type === "opaqueredirect" ||
+    res.redirected ||
+    (res.status >= 300 && res.status < 400)
+  ) {
+    throw new OAuthTokenEndpointError(res.status, "redirect_refused");
+  }
   if (!res.ok) {
     let detail = "";
     try {
-      detail = await res.text();
+      detail = oauthErrorCode(await res.text());
     } catch {
-      // Non-2xx is the error; the body is optional detail.
+      // Non-2xx is the error; the body is not public detail.
     }
     throw new OAuthTokenEndpointError(res.status, detail);
   }
@@ -170,7 +234,17 @@ async function postToken(
   const json = TokenResponse(payload);
   if (json instanceof type.errors)
     throw new OAuthTokenResponseSchemaError(json.summary);
-  return json;
+  return omitBlankRefresh(json);
+}
+
+// `refresh_token: ""` parses as a string, but it is not a credential. Drop it
+// at the boundary so later stages see the same shape as an omitted field.
+function omitBlankRefresh(response: TokenResponse): TokenResponse {
+  if (presentRefreshToken(response.refresh_token) !== undefined)
+    return response;
+  if (response.refresh_token === undefined) return response;
+  const { refresh_token: _blank, ...rest } = response;
+  return rest;
 }
 
 /**
@@ -203,6 +277,8 @@ export async function refreshTokenRequest(
   refreshToken: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<TokenResponse> {
+  if (presentRefreshToken(refreshToken) === undefined)
+    throw new OAuthMissingRefreshTokenError();
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,

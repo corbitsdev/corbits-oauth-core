@@ -46,6 +46,7 @@ const AuthorizationServerMetadata = type({
   "token_endpoint_auth_methods_supported?": "string[]",
   "code_challenge_methods_supported?": "string[]",
   "authorization_response_iss_parameter_supported?": "boolean",
+  "client_id_metadata_document_supported?": "boolean",
 });
 
 // RFC 7591 §3.2.1 — registration response, narrowed to the assigned client id
@@ -71,6 +72,8 @@ export type McpAuthorizationServer = {
   // RFC 9207: when true, every authorization response carries `iss` and the
   // client must reject a redirect whose `iss` is not this issuer.
   authorizationResponseIssParameterSupported?: boolean;
+  /** OAuth Client ID Metadata Documents (MCP authorization). */
+  clientIdMetadataDocumentSupported?: boolean;
 };
 
 // A login entry derived from a resource URL: everything the host needs to
@@ -255,6 +258,43 @@ function assertSupportsPublicClients(
     );
 }
 
+// RFC 8414 §3.3: the issuer value in the document must be the identifier the
+// well-known URL was built from. Anything else is discarded.
+function assertFetchedIssuer(
+  asMetadataUrl: string,
+  fetchIssuer: string,
+  metadataIssuer: string,
+): void {
+  if (metadataIssuer !== fetchIssuer)
+    throw new OAuthDiscoveryError(
+      `authorization-server metadata at ${asMetadataUrl} issuer does not match the issuer identifier used to retrieve it.`,
+    );
+}
+
+// The authorization and token endpoints are used with that issuer. A document
+// that points either at another origin is a mix-up: the code and verifier
+// would be posted to the foreign token endpoint.
+export function assertEndpointOnIssuer(
+  issuer: string,
+  endpoint: string,
+  field: "authorization_endpoint" | "token_endpoint",
+): void {
+  let issuerUrl: URL;
+  let endpointUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+    endpointUrl = new URL(endpoint);
+  } catch {
+    throw new OAuthDiscoveryError(
+      `authorization server metadata ${field} is not a valid URL.`,
+    );
+  }
+  if (endpointUrl.origin !== issuerUrl.origin)
+    throw new OAuthDiscoveryError(
+      `authorization server metadata ${field} origin does not match the issuer.`,
+    );
+}
+
 // Resolve the authorization server for a resource URL: protected-resource
 // metadata first (RFC 9728), falling back to authorization-server metadata
 // served directly at the resource (RFC 8414 §3.1) for servers that skip the
@@ -301,11 +341,10 @@ export async function discoverMcpLoginEntry(
   }
 
   // No protected-resource document: the resource itself may serve
-  // authorization-server metadata (some MCP servers do).
-  const asMetadataUrl =
-    issuer === undefined
-      ? wellKnownUrl(resourceUrl, "oauth-authorization-server")
-      : wellKnownUrl(issuer, "oauth-authorization-server");
+  // authorization-server metadata (some MCP servers do). The URL the
+  // well-known suffix is inserted into is the issuer RFC 8414 compares.
+  const fetchIssuer = issuer ?? resourceUrl;
+  const asMetadataUrl = wellKnownUrl(fetchIssuer, "oauth-authorization-server");
   const asRes = await getJson(asMetadataUrl, fetchImpl, timeoutMs);
   if (!asRes.ok) throw badStatus(asMetadataUrl, asRes.status);
   const metadata = AuthorizationServerMetadata(
@@ -315,6 +354,18 @@ export async function discoverMcpLoginEntry(
     throw new OAuthDiscoveryError(
       `authorization-server metadata at ${asMetadataUrl} is malformed: ${metadata.summary}`,
     );
+
+  assertFetchedIssuer(asMetadataUrl, fetchIssuer, metadata.issuer);
+  assertEndpointOnIssuer(
+    metadata.issuer,
+    metadata.authorization_endpoint,
+    "authorization_endpoint",
+  );
+  assertEndpointOnIssuer(
+    metadata.issuer,
+    metadata.token_endpoint,
+    "token_endpoint",
+  );
 
   assertSupportsS256(asMetadataUrl, metadata.code_challenge_methods_supported);
   assertSupportsPublicClients(
@@ -355,6 +406,12 @@ export async function discoverMcpLoginEntry(
               metadata.authorization_response_iss_parameter_supported,
           }
         : {}),
+      ...(metadata.client_id_metadata_document_supported !== undefined
+        ? {
+            clientIdMetadataDocumentSupported:
+              metadata.client_id_metadata_document_supported,
+          }
+        : {}),
     },
     ...(resourceScopesSupported !== undefined
       ? { resourceScopesSupported }
@@ -391,6 +448,79 @@ function grantedScope(
   requested: string | undefined,
 ): string | undefined {
   return echoed ?? requested;
+}
+
+function canonicalClientMetadataUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new OAuthDiscoveryError("client metadata URL is not absolute");
+  }
+  if (url.protocol !== "https:")
+    throw new OAuthDiscoveryError("client metadata URL must use https");
+  if (url.pathname === "" || url.pathname === "/")
+    throw new OAuthDiscoveryError("client metadata URL must contain a path");
+  if (url.hash !== "" || url.username !== "" || url.password !== "")
+    throw new OAuthDiscoveryError(
+      "client metadata URL must not contain a fragment or userinfo",
+    );
+  const afterScheme = raw.slice(raw.indexOf("://") + 3);
+  // `\` is a path separator for the URL parser, same as `/`. Splitting only on
+  // `/` lets `a\..\client.json` through, while `new URL` fetches `/client.json`.
+  const pathStart = afterScheme.search(/[\\/]/);
+  const rawPath =
+    pathStart === -1
+      ? ""
+      : (afterScheme.slice(pathStart).split(/[?#]/, 1)[0] ?? "");
+  if (
+    rawPath.split(/[\\/]/).some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment))
+  )
+    throw new OAuthDiscoveryError(
+      "client metadata URL must not contain dot segments",
+    );
+  // One identifier for the client id and the URL a fetch will request: host
+  // case and the default https port are not distinct from the canonical URL.
+  return url.href;
+}
+
+/**
+ * How a resource login obtains a client id. A pre-registered id wins, then a
+ * Client ID Metadata Document when the server advertises it and the host
+ * supplied a document URL, then RFC 7591. `undefined` means none of those
+ * is available.
+ */
+export type ClientRegistrationPlan =
+  | { readonly mechanism: "pre-registered"; readonly clientId: string }
+  | { readonly mechanism: "client-id-metadata"; readonly clientId: string }
+  | { readonly mechanism: "dynamic"; readonly registrationEndpoint: string };
+
+export function clientRegistrationPlan(opts: {
+  readonly registrationEndpoint?: string | undefined;
+  readonly clientIdMetadataDocumentSupported?: boolean | undefined;
+  readonly clientMetadataUrl?: string | undefined;
+  readonly preRegisteredClientId?: string | undefined;
+}): ClientRegistrationPlan | undefined {
+  const preRegistered = opts.preRegisteredClientId?.trim();
+  if (preRegistered) {
+    return { mechanism: "pre-registered", clientId: preRegistered };
+  }
+  if (
+    opts.clientIdMetadataDocumentSupported === true &&
+    opts.clientMetadataUrl !== undefined
+  ) {
+    return {
+      mechanism: "client-id-metadata",
+      clientId: canonicalClientMetadataUrl(opts.clientMetadataUrl),
+    };
+  }
+  if (opts.registrationEndpoint !== undefined) {
+    return {
+      mechanism: "dynamic",
+      registrationEndpoint: opts.registrationEndpoint,
+    };
+  }
+  return undefined;
 }
 
 /**

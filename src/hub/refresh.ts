@@ -6,10 +6,12 @@ import { and, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 
 import {
   baseTokensFromResponse,
+  OAuthMissingRefreshTokenError,
   OAuthTokenEndpointError,
   refreshTokenRequest,
   type BaseTokens,
 } from "../index.js";
+import { presentRefreshToken } from "../tokens.js";
 import {
   OAUTH_CLIENT_ID_METADATA_KEY,
   OAUTH_PROVIDER_METADATA_KEY,
@@ -117,10 +119,13 @@ function dueAt(expiresAt: Date | null, deadline: number): boolean {
 }
 
 // Only `invalid_grant` (RFC 6749 §5.2) means the refresh token itself is
-// dead and a fresh sign-in is the fix. Everything else — 429, 408, a 401
+// dead and a fresh sign-in is the fix. A grant that never had a refresh
+// token is the same outcome. Everything else — 429, 408, a 401
 // `invalid_client`, 5xx, network, decrypt — is retried on the next pass.
 function isReauthError(error: unknown): boolean {
+  if (error instanceof OAuthMissingRefreshTokenError) return true;
   if (!(error instanceof OAuthTokenEndpointError)) return false;
+  if (error.detail === "invalid_grant") return true;
   try {
     const body: unknown = JSON.parse(error.detail);
     return (
@@ -170,8 +175,9 @@ export async function refreshCredential(
       if (!dueAt(row.expiresAt, deadline)) return null;
       const refresh =
         provider?.refresh ?? registeredClientRefresh(row.metadata);
-      if (refresh === undefined) return null;
-      const tokens = await refresh(row.refreshSecret, Date.now());
+      const refreshSecret = presentRefreshToken(row.refreshSecret);
+      if (refresh === undefined || refreshSecret === undefined) return null;
+      const tokens = await refresh(refreshSecret, Date.now());
       // The prior metadata is carried forward: a refresh response may omit
       // what the first exchange established (an account id, say).
       return {
@@ -230,6 +236,7 @@ export function createOAuthRefreshStore(opts: {
           and(
             eq(credential.type, "oauth_token"),
             eq(credential.status, "active"),
+            // Access-token-only rows have nothing to redeem, so they are not due.
             isNotNull(credential.refreshSecret),
             isNotNull(credential.expiresAt),
             lte(credential.expiresAt, dueBefore),
@@ -258,10 +265,21 @@ export function createOAuthRefreshStore(opts: {
             `credential ${credentialId} has unreadable metadata: ${metadata.summary}`,
           );
         }
-        const refreshSecret = await opts.cipher.decrypt(
-          row.refreshSecret,
-          credentialAad(row.id, "refreshSecret"),
+        const refreshSecret = presentRefreshToken(
+          await opts.cipher.decrypt(
+            row.refreshSecret,
+            credentialAad(row.id, "refreshSecret"),
+          ),
         );
+        if (refreshSecret === undefined) {
+          // Blank plaintext is not a credential. Null is what listDue treats
+          // as absent, so this row is not selected again.
+          await tx
+            .update(credential)
+            .set({ refreshSecret: null, updatedAt: new Date() })
+            .where(eq(credential.id, credentialId));
+          return false;
+        }
         let result;
         try {
           result = await refresh({

@@ -12,6 +12,7 @@ import {
   exchangeCode,
   mcpClientConfig,
   OAuthDiscoveryError,
+  clientRegistrationPlan,
   registerMcpClient,
   startCallbackServer,
   startOAuthLogin,
@@ -21,6 +22,7 @@ import {
   type OAuthLoginHandle,
   type OAuthClientConfig,
 } from "../index.js";
+import { assertEndpointOnIssuer } from "../discovery.js";
 import {
   checkOAuthCredentialTarget,
   OAUTH_CLIENT_ID_METADATA_KEY,
@@ -51,6 +53,8 @@ const Target = { providerId: "string", credentialName: "string" } as const;
 const StartLogin = type({ provider: "string", ...Target }).or({
   /** An MCP server URL: discovery and dynamic registration supply the rest. */
   resourceUrl: "string",
+  /** Pre-registered client id. Skips dynamic registration when set. */
+  "clientId?": "string",
   ...Target,
 });
 
@@ -94,12 +98,21 @@ export function mountOAuthCallback(
   opts: { readonly store: OAuthLoginStore; readonly path?: string },
 ): void {
   app.get(opts.path ?? "/oauth/callback", (c) => {
+    const query = (key: string): string | undefined => c.req.queries(key)?.[0];
+    const repeated = [
+      "state",
+      "code",
+      "error",
+      "error_description",
+      "iss",
+    ].some((key) => (c.req.queries(key)?.length ?? 0) > 1);
     const { status, html } = opts.store.callbacks.handle({
-      state: c.req.query("state"),
-      code: c.req.query("code"),
-      error: c.req.query("error"),
-      errorDescription: c.req.query("error_description"),
-      iss: c.req.query("iss"),
+      state: query("state"),
+      code: query("code"),
+      error: query("error"),
+      errorDescription: query("error_description"),
+      iss: query("iss"),
+      ...(repeated ? { repeatedParameter: true } : {}),
     });
     // The code sits in this URL: keep it out of caches and referrers.
     c.header("cache-control", "no-store");
@@ -148,6 +161,13 @@ export type MountOAuthLoginOpts = {
   readonly fetchImpl?: FetchLike;
   /** The client name shown on a dynamically registered consent screen. */
   readonly clientName?: string;
+  /**
+   * HTTPS URL of this hub's Client ID Metadata Document. Used as `client_id`
+   * when the authorization server advertises that mechanism and the login
+   * does not pass a pre-registered client id. The host must publish the
+   * document at this URL; passing it does not publish it.
+   */
+  readonly clientMetadataUrl?: string;
   readonly loginTtlMs?: number;
   /** Reported when a login fails after the request that started it returned. */
   readonly onError?: (error: unknown, context: { provider: string }) => void;
@@ -226,53 +246,73 @@ export function mountOAuthLogin(
         resourceUrl: body.resourceUrl,
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
       });
-      const registrationEndpoint =
-        entry.authorizationServer.registrationEndpoint;
-      if (registrationEndpoint === undefined) {
+      const plan = clientRegistrationPlan({
+        registrationEndpoint: entry.authorizationServer.registrationEndpoint,
+        clientIdMetadataDocumentSupported:
+          entry.authorizationServer.clientIdMetadataDocumentSupported,
+        clientMetadataUrl: opts.clientMetadataUrl,
+        preRegisteredClientId: body.clientId,
+      });
+      if (plan === undefined) {
         return {
-          error: `${body.resourceUrl} does not support dynamic client registration`,
+          error: `${body.resourceUrl} has no usable client registration mechanism`,
           status: 502,
         };
       }
-      const registration = await registerMcpClient({
-        registrationEndpoint,
-        redirectUris: [redirectUri],
-        clientName: opts.clientName ?? "Corbits",
-        ...(entry.authorizationServer.grantTypesSupported !== undefined
-          ? {
-              grantTypesSupported:
-                entry.authorizationServer.grantTypesSupported,
-            }
-          : {}),
-        ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
-      });
+      const clientId =
+        plan.mechanism === "dynamic"
+          ? (
+              await registerMcpClient({
+                registrationEndpoint: plan.registrationEndpoint,
+                redirectUris: [redirectUri],
+                clientName: opts.clientName ?? "Corbits",
+                ...(entry.authorizationServer.grantTypesSupported !== undefined
+                  ? {
+                      grantTypesSupported:
+                        entry.authorizationServer.grantTypesSupported,
+                    }
+                  : {}),
+                ...(opts.fetchImpl !== undefined
+                  ? { fetchImpl: opts.fetchImpl }
+                  : {}),
+              })
+            ).clientId
+          : plan.clientId;
       const config = mcpClientConfig(entry, {
-        clientId: registration.clientId,
+        clientId,
         redirectUri,
       });
+      const issuer = entry.authorizationServer.issuer;
+      assertEndpointOnIssuer(
+        issuer,
+        config.authorizeUrl,
+        "authorization_endpoint",
+      );
       return {
         flow: {
           provider: new URL(entry.resourceUrl).origin,
           config,
-          exchange: async (code, verifier, now) =>
-            baseTokensFromResponse(
+          exchange: async (code, verifier, now) => {
+            assertEndpointOnIssuer(issuer, config.tokenUrl, "token_endpoint");
+            return baseTokensFromResponse(
               await exchangeCode(config, code, verifier, opts.fetchImpl),
               now,
               undefined,
-            ),
+            );
+          },
           metadata: () => ({
-            [OAUTH_CLIENT_ID_METADATA_KEY]: registration.clientId,
+            [OAUTH_CLIENT_ID_METADATA_KEY]: clientId,
             [OAUTH_TOKEN_URL_METADATA_KEY]: config.tokenUrl,
             [OAUTH_RESOURCE_METADATA_KEY]: entry.resourceUrl,
           }),
           startCallbackServer: (state) =>
-            callbacks.start(
-              state,
-              entry.authorizationServer
+            callbacks.start(state, {
+              expectedIssuer: entry.authorizationServer.issuer,
+              ...(entry.authorizationServer
                 .authorizationResponseIssParameterSupported === true
-                ? { expectedIssuer: entry.authorizationServer.issuer }
-                : {},
-            ),
+                ? { requireIssuer: true }
+                : {}),
+            }),
         },
       };
     } catch (cause) {

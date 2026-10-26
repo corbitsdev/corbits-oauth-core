@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test";
 
 import {
   baseTokensFromResponse,
+  buildAuthorizeUrl,
   exchangeCode,
+  OAuthMissingRefreshTokenError,
+  OAuthTokenEndpointError,
   OAuthTokenResponseSchemaError,
+  refreshTokenRequest,
   type FetchLike,
   type OAuthClientConfig,
 } from "./index.js";
+import { generatePkce } from "./pkce.js";
 
 const config: OAuthClientConfig = {
   clientId: "client-id",
@@ -77,5 +82,177 @@ describe("OAuth client — hostile token responses", () => {
       undefined,
     );
     expect(tokens.expiresAt).toBeUndefined();
+  });
+
+  test("accepts an access token with no refresh token instead of inventing one", () => {
+    // Load-bearing: some grants never issue a refresh token. Throwing here
+    // rejects a valid token response; storing a fabricated refresh token
+    // would later be presented to the authorization server.
+    const tokens = baseTokensFromResponse(
+      { access_token: "access-only" },
+      0,
+      undefined,
+    );
+    expect(tokens.access).toBe("access-only");
+    expect(tokens.refresh).toBeUndefined();
+  });
+
+  test("treats a blank refresh token as absent, including one carried forward", () => {
+    // Load-bearing: `""` and `" "` are strings, so a nullish check stores and
+    // later redeems them. A blank value is not a credential.
+    for (const refresh of ["", " "]) {
+      const tokens = baseTokensFromResponse(
+        { access_token: "access-kept", refresh_token: refresh },
+        0,
+        refresh,
+      );
+      expect(tokens.refresh).toBeUndefined();
+    }
+    const kept = baseTokensFromResponse(
+      { access_token: "access-kept", refresh_token: " " },
+      0,
+      "prior-refresh",
+    );
+    expect(kept.refresh).toBe("prior-refresh");
+  });
+
+  test("parses a blank refresh_token off the token response", async () => {
+    const response = await exchangeCode(
+      config,
+      "auth-code",
+      "verifier",
+      fakeFetch({
+        access_token: "access-kept",
+        refresh_token: "",
+        expires_in: 60,
+      }),
+    );
+    expect(response.refresh_token).toBeUndefined();
+    expect(response.access_token).toBe("access-kept");
+  });
+
+  test("does not post a blank refresh token", async () => {
+    let calls = 0;
+    const impl: FetchLike = async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({ access_token: "access-must-not-leak" }),
+        { status: 200 },
+      );
+    };
+    impl.preconnect = () => undefined;
+    const error = await refreshTokenRequest(config, " ", impl).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(calls).toBe(0);
+    expect(error).toBeInstanceOf(OAuthMissingRefreshTokenError);
+    expect(String(error)).not.toContain("access-must-not-leak");
+  });
+});
+
+describe("buildAuthorizeUrl — protected parameters", () => {
+  test("ignores extras that would replace PKCE, state, or the client fields", () => {
+    // Load-bearing: extraAuthorizeParams are caller-controlled. Applied
+    // after the protected fields, they could point the code exchange at a
+    // challenge the caller does not hold or swap the CSRF state.
+    const pkce = generatePkce();
+    const url = new URL(
+      buildAuthorizeUrl(
+        {
+          ...config,
+          scopes: ["openid"],
+          resource: "https://mcp.example.com/mcp",
+          extraAuthorizeParams: {
+            state: "attacker-state",
+            code_challenge: "attacker-challenge",
+            code_challenge_method: "plain",
+            client_id: "other-client",
+            redirect_uri: "https://evil.example/callback",
+            response_type: "token",
+            scope: "admin",
+            resource: "https://evil.example/resource",
+            prompt: "consent",
+          },
+        },
+        pkce,
+        "real-state",
+      ),
+    );
+    expect(url.searchParams.get("state")).toBe("real-state");
+    expect(url.searchParams.get("code_challenge")).toBe(pkce.challenge);
+    expect(url.searchParams.get("code_challenge_method")).toBe(pkce.method);
+    expect(url.searchParams.get("client_id")).toBe(config.clientId);
+    expect(url.searchParams.get("redirect_uri")).toBe(config.redirectUri);
+    expect(url.searchParams.get("response_type")).toBe("code");
+    expect(url.searchParams.get("scope")).toBe("openid");
+    expect(url.searchParams.get("resource")).toBe(
+      "https://mcp.example.com/mcp",
+    );
+    expect(url.searchParams.get("prompt")).toBe("consent");
+  });
+
+  test("omits scope when the caller has none", () => {
+    const url = new URL(
+      buildAuthorizeUrl({ ...config, scopes: [] }, generatePkce(), "state-1"),
+    );
+    expect(url.searchParams.has("scope")).toBe(false);
+  });
+});
+
+describe("token endpoint — redirects and error bodies", () => {
+  test("does not follow a redirect or copy its body into the error", async () => {
+    // Load-bearing: the POST body holds the code or refresh token. Following
+    // a 307 replays that secret at Location, and echoing the body can put a
+    // token into logs.
+    let calls = 0;
+    let redirect: RequestInit["redirect"];
+    const impl: FetchLike = async (_input, init) => {
+      calls += 1;
+      redirect = init?.redirect;
+      return new Response("secret-refresh-token", {
+        status: 307,
+        headers: {
+          location: "https://evil.example/collect?token=secret-refresh-token",
+        },
+      });
+    };
+    impl.preconnect = () => undefined;
+    const error = await exchangeCode(
+      config,
+      "auth-code",
+      "verifier",
+      impl,
+    ).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(calls).toBe(1);
+    expect(redirect).toBe("manual");
+    expect(error).toBeInstanceOf(OAuthTokenEndpointError);
+    expect(String(error)).not.toContain("secret-refresh-token");
+    expect(String(error)).not.toContain("evil.example");
+    expect(String(error)).toContain("redirect_refused");
+  });
+
+  test("keeps only the oauth error code from a non-2xx body", async () => {
+    const error = await exchangeCode(
+      config,
+      "auth-code",
+      "verifier",
+      fakeFetch(
+        {
+          error: "invalid_grant",
+          error_description: "leaked-access-token",
+        },
+        400,
+      ),
+    ).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(OAuthTokenEndpointError);
+    expect(String(error)).toContain("invalid_grant");
+    expect(String(error)).not.toContain("leaked-access-token");
   });
 });

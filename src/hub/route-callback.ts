@@ -14,17 +14,21 @@ export type CallbackParams = {
   errorDescription?: string | undefined;
   /** RFC 9207 issuer identifier, when the authorization server sends one. */
   iss?: string | undefined;
+  /** Repeated query parameter. Refused before `code` or `error` is used. */
+  repeatedParameter?: boolean;
 };
 
 export type CallbackResponse = { status: 200 | 400; html: string };
 
 export type RouteCallbackOptions = {
   /**
-   * The issuer every redirect for this login must carry as `iss` (RFC 9207).
-   * Set only when the server's metadata promises the parameter; a redirect
-   * missing or mismatching it is then refused as a mix-up attack.
+   * Issuer recorded with this login's state (RFC 9207). A present `iss` must
+   * match it exactly, whether or not the server advertised support. A missing
+   * `iss` is refused only when `requireIssuer` is set.
    */
   expectedIssuer?: string;
+  /** Set when metadata says `authorization_response_iss_parameter_supported`. */
+  requireIssuer?: boolean;
 };
 
 /**
@@ -43,6 +47,7 @@ export type RouteCallbacks = {
 type Pending = {
   finish: (outcome: Outcome) => void;
   expectedIssuer: string | undefined;
+  requireIssuer: boolean;
 };
 
 export function createRouteCallbacks(): RouteCallbacks {
@@ -66,6 +71,7 @@ export function createRouteCallbacks(): RouteCallbacks {
       pending.set(expectedState, {
         finish,
         expectedIssuer: options?.expectedIssuer,
+        requireIssuer: options?.requireIssuer === true,
       });
       return Promise.resolve({
         // Served by the hub's own listener; there is no loopback port.
@@ -88,7 +94,7 @@ export function createRouteCallbacks(): RouteCallbacks {
         close: () => pending.delete(expectedState),
       });
     },
-    handle({ state, code, error, errorDescription, iss }) {
+    handle({ state, code, error, errorDescription, iss, repeatedParameter }) {
       const entry = state === undefined ? undefined : pending.get(state);
       // Not a login in flight (or a stale one): refuse without touching any.
       if (entry === undefined)
@@ -105,10 +111,16 @@ export function createRouteCallbacks(): RouteCallbacks {
         });
         return { status: 400, html: signInFailedHtml(failure) };
       };
-      // RFC 9207 §2.4: a client that knows the server sends `iss` must
-      // reject a response whose `iss` is absent or names another issuer.
-      if (entry.expectedIssuer !== undefined && iss !== entry.expectedIssuer)
-        return failed({ code: "state_mismatch" });
+      // RFC 9207: a present `iss` must be the issuer stored with this state.
+      // A missing `iss` fails only when the server advertised the parameter.
+      if (repeatedParameter === true) return failed({ code: "state_mismatch" });
+      if (entry.expectedIssuer !== undefined) {
+        if (iss === undefined) {
+          if (entry.requireIssuer) return failed({ code: "state_mismatch" });
+        } else if (iss !== entry.expectedIssuer) {
+          return failed({ code: "state_mismatch" });
+        }
+      }
       if (error !== undefined)
         return failed(
           errorDescription === undefined

@@ -26,6 +26,7 @@ function fakeStore(row: {
   provider: string;
   expiresAt: Date | null;
   metadata?: Record<string, string>;
+  refreshSecret?: string;
 }) {
   const written: { tokens: BaseTokens; metadata: Record<string, string> }[] =
     [];
@@ -40,7 +41,7 @@ function fakeStore(row: {
         id: row.id,
         tenantId: row.tenantId,
         expiresAt: row.expiresAt,
-        refreshSecret: "refresh-token",
+        refreshSecret: row.refreshSecret ?? "refresh-token",
         metadata: row.metadata ?? {},
       });
       if (result === null) return false;
@@ -179,6 +180,37 @@ describe("createRefreshTicker", () => {
     expect(written).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  it("does not refresh a blank refresh token", async () => {
+    // Load-bearing: an encrypted `""` or `" "` is non-null, so listDue would
+    // select it and the ticker would redeem it. Blank is not a credential,
+    // and the skip must not disclose an access token.
+    const access = "access-must-not-leak";
+    for (const refreshSecret of ["", " "]) {
+      const { store, written } = fakeStore({
+        id: "cred_1",
+        tenantId: "tenant_1",
+        provider: "acme",
+        expiresAt: new Date(Date.now() + MINUTE),
+        refreshSecret,
+      });
+      const calls: string[] = [];
+      const errors: unknown[] = [];
+      await tickOnce(store, {
+        providers: providers(() => {
+          calls.push(access);
+          return Promise.resolve({ access, refresh: "next" });
+        }),
+        marginMs: 10 * MINUTE,
+        onError: (error) => {
+          errors.push(error);
+        },
+      });
+      expect(calls).toEqual([]);
+      expect(written).toEqual([]);
+      expect(errors.map(String).join("\n")).not.toContain(access);
+    }
+  });
 });
 
 describe("a credential of an unregistered provider", () => {
@@ -269,6 +301,55 @@ describe("refreshCredential", () => {
     );
     expect(result.ok).toBe(false);
     expect(!result.ok && result.reason).toBe("error");
+    expect(written).toEqual([]);
+  });
+
+  it("reports reauth when invalid_grant carries a long error_description", async () => {
+    // Load-bearing: slicing the body to 4096 bytes before JSON.parse drops
+    // invalid_grant once error_description runs past the cut, so the row stays
+    // active and is retried forever. The description itself is not public.
+    const description = "d".repeat(5000);
+    const { store, written } = fakeStore({
+      id: "cred_1",
+      tenantId: "tenant_1",
+      provider: "https://mcp.example.com",
+      expiresAt: new Date(Date.now() + MINUTE),
+      metadata: {
+        oauthClientId: "dyn-client",
+        oauthTokenUrl: "https://auth.example.com/token",
+      },
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: "invalid_grant",
+              error_description: description,
+            }),
+            { status: 400 },
+          ),
+        ),
+      { preconnect: () => undefined },
+    );
+    let result: Awaited<ReturnType<typeof refreshCredential>>;
+    try {
+      result = await refreshCredential(
+        store,
+        { providers: {}, marginMs: 10 * MINUTE },
+        {
+          id: "cred_1",
+          tenantId: "tenant_1",
+          provider: "https://mcp.example.com",
+        },
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(result).toMatchObject({ ok: false, reason: "reauth" });
+    expect(!result.ok && result.message).toContain("invalid_grant");
+    expect(!result.ok && result.message).not.toContain(description);
     expect(written).toEqual([]);
   });
 });

@@ -58,9 +58,11 @@ export {
 export {
   discoverMcpLoginEntry,
   registerMcpClient,
+  clientRegistrationPlan,
   mcpClientConfig,
   selectMcpScopes,
   OAuthDiscoveryError,
+  type ClientRegistrationPlan,
   type DiscoverMcpLoginEntryOptions,
   type McpAuthorizationServer,
   type McpClientConfigOptions,

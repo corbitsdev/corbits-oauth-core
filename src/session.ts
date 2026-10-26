@@ -1,4 +1,5 @@
-import type { BaseTokens } from "./tokens.js";
+import { OAuthMissingRefreshTokenError } from "./client.js";
+import { presentRefreshToken, type BaseTokens } from "./tokens.js";
 
 /**
  * Whether `tokens` is at or within `skewMs` of its expiry at `now`.
@@ -71,8 +72,15 @@ export function createTokenSession<TTokens extends BaseTokens, TAccess>(
     // Re-check expiry after the I/O; another caller may have refreshed already.
     if (!isExpired(profile.tokens, now)) return deps.toAccess(profile.tokens);
     let refreshed: TTokens;
+    const refreshToken = presentRefreshToken(profile.tokens.refresh);
+    if (refreshToken === undefined) {
+      throw new OAuthRefreshFailedError(
+        name,
+        new OAuthMissingRefreshTokenError(),
+      );
+    }
     try {
-      refreshed = await deps.refreshTokens(profile.tokens.refresh, now);
+      refreshed = await deps.refreshTokens(refreshToken, now);
     } catch (err) {
       throw new OAuthRefreshFailedError(name, err);
     }
