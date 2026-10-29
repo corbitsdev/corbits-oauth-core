@@ -30,6 +30,7 @@ import {
   OAUTH_TOKEN_URL_METADATA_KEY,
   OAuthCredentialTargetRejectedError,
   persistOAuthCredential,
+  type OAuthCredentialOwner,
 } from "./credentials.js";
 import {
   createLoginStore,
@@ -169,6 +170,12 @@ export type MountOAuthLoginOpts = {
    */
   readonly clientMetadataUrl?: string;
   readonly loginTtlMs?: number;
+  /**
+   * Who owns the credentials these logins write; defaults to `principal`.
+   * `tenant` writes organizational credentials, so gate the mount with an
+   * administrative grant. A tenant login never replaces an existing name.
+   */
+  readonly owner?: OAuthCredentialOwner;
   /** Reported when a login fails after the request that started it returned. */
   readonly onError?: (error: unknown, context: { provider: string }) => void;
 };
@@ -201,7 +208,7 @@ export function mountOAuthLogin(
   const ttlMs = opts.loginTtlMs ?? DEFAULT_LOGIN_TTL_MS;
   if (opts.callbackUrl !== undefined) assertSecureCallbackUrl(opts.callbackUrl);
 
-  const owner = (c: {
+  const caller = (c: {
     get(key: "tenant" | "principal"): { id: string };
   }): { tenantId: string; principalId: string } => ({
     tenantId: c.get("tenant").id,
@@ -331,12 +338,13 @@ export function mountOAuthLogin(
     if (body instanceof type.errors) {
       return c.json({ error: body.summary }, 400);
     }
-    const { tenantId, principalId } = owner(c);
+    const { tenantId, principalId } = caller(c);
     const rejected = await checkOAuthCredentialTarget(opts.db, {
       tenantId,
       principalId,
       providerId: body.providerId,
       name: body.credentialName,
+      ...(opts.owner !== undefined ? { owner: opts.owner } : {}),
     });
     if (rejected !== null) {
       return c.json({ error: rejected.error }, rejected.status);
@@ -421,6 +429,7 @@ export function mountOAuthLogin(
             scopes: flow.config.scopes,
             tokens: staged.profile.tokens,
             metadata: flow.metadata(staged.profile.tokens),
+            ...(opts.owner !== undefined ? { owner: opts.owner } : {}),
           });
           logins.settle(loginId, { status: "completed", credentialId });
           releaseLoginId(flow.provider, loginId);
@@ -452,14 +461,14 @@ export function mountOAuthLogin(
   app.get("/oauth-logins/:loginId", opts.requireGrant, (c) => {
     const state: LoginState | undefined = logins.read(
       c.req.param("loginId"),
-      owner(c),
+      caller(c),
     );
     if (state === undefined) return c.json({ error: "not_found" }, 404);
     return c.json(state);
   });
 
   app.delete("/oauth-logins/:loginId", opts.requireGrant, (c) =>
-    logins.cancel(c.req.param("loginId"), owner(c))
+    logins.cancel(c.req.param("loginId"), caller(c))
       ? c.body(null, 204)
       : c.json({ error: "not_found" }, 404),
   );

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { TenantEnv } from "@intx/hub-api";
-import { credential } from "@intx/db/schema";
+import { credential, grant } from "@intx/db/schema";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
@@ -62,7 +62,7 @@ beforeAll(async () => {
 
 afterAll(() => t.close());
 
-function app(principalId: string) {
+function app(principalId: string, owner?: "tenant") {
   const host = new Hono<TenantEnv>();
   host.use(async (c, next) => {
     const at = new Date(0);
@@ -94,6 +94,7 @@ function app(principalId: string) {
     requireGrant: async (_c, next) => {
       await next();
     },
+    ...(owner !== undefined ? { owner } : {}),
   });
   return host;
 }
@@ -166,5 +167,129 @@ describe("the OAuth login target", () => {
       });
     const first = await login("first");
     expect(await login("second")).toBe(first);
+  });
+
+  // Interchange resolves only an organizational credential (principalId
+  // null) for a catalog model provider, so a tenant-owned login must land
+  // with no principal, and must not be replaceable by a personal one.
+  describe("owned by the tenant", () => {
+    const persistAs = (
+      name: string,
+      principalId: string,
+      access: string,
+      owner?: "tenant",
+    ) =>
+      persistOAuthCredential({
+        db: t.db,
+        cipher: plainCipher,
+        tenantId: "ta",
+        principalId,
+        providerId: "prov_inherited",
+        provider: "acme",
+        name,
+        scopes: ["openid"],
+        tokens: { access, refresh: "refresh" },
+        metadata: {},
+        ...(owner !== undefined ? { owner } : {}),
+      });
+
+    it("stores no principal and no creator grant", async () => {
+      const id = await persistAs("shared", "p_a", "first", "tenant");
+      const row = await t.db.query.credential.findFirst({
+        where: eq(credential.id, id),
+      });
+      expect(row?.principalId).toBeNull();
+      const grants = await t.db.query.grant.findMany({
+        where: eq(grant.resource, `credential:${id}`),
+      });
+      expect(grants).toEqual([]);
+    });
+
+    it("never replaces an existing name, so a login cannot take over an org credential", async () => {
+      const id = await persistAs("org", "p_a", "first", "tenant");
+      await expect(persistAs("org", "p_b", "second", "tenant")).rejects.toThrow(
+        "already exists",
+      );
+      await expect(persistAs("org", "p_a", "third")).rejects.toThrow(
+        "already exists",
+      );
+      const row = await t.db.query.credential.findFirst({
+        where: eq(credential.id, id),
+      });
+      expect(row?.secret).toEndWith("|first");
+    });
+
+    it("stores a mount's completed login with no principal", async () => {
+      const host = new Hono<TenantEnv>();
+      host.use(async (c, next) => {
+        const at = new Date(0);
+        c.set("tenant", {
+          id: "ta",
+          name: "ta",
+          slug: "ta",
+          domain: "ta.example",
+          parentId: "tparent",
+          config: null,
+          createdAt: at,
+          updatedAt: at,
+        });
+        c.set("principal", {
+          id: "p_a",
+          tenantId: "ta",
+          kind: "user",
+          refId: "p_a",
+          status: "active",
+          createdAt: at,
+          updatedAt: at,
+        });
+        await next();
+      });
+      mountOAuthLogin(host, {
+        db: t.db,
+        cipher: plainCipher,
+        providers: {
+          granting: {
+            oauthConfig: {
+              ...providers.acme.oauthConfig,
+              redirectUri: "http://127.0.0.1:1457/callback",
+            },
+            exchange: () => Promise.resolve({ access: "minted", refresh: "r" }),
+          },
+        },
+        requireGrant: async (_c, next) => {
+          await next();
+        },
+        owner: "tenant",
+      });
+      const started = await host.request("/oauth-logins", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "granting",
+          providerId: "prov_inherited",
+          credentialName: "mounted",
+        }),
+      });
+      expect(started.status).toBe(201);
+      const { loginId, authorizeUrl } = (await started.json()) as {
+        loginId: string;
+        authorizeUrl: string;
+      };
+      const state = new URL(authorizeUrl).searchParams.get("state");
+      await fetch(`http://127.0.0.1:1457/callback?code=c&state=${state}`);
+      let polled: { status?: string; credentialId?: string } = {};
+      for (let i = 0; i < 50 && polled.status !== "completed"; i++) {
+        polled = (await (
+          await host.request(`/oauth-logins/${loginId}`)
+        ).json()) as typeof polled;
+        if (polled.status !== "completed") await Bun.sleep(20);
+      }
+      expect(polled.status).toBe("completed");
+      const row = await t.db.query.credential.findFirst({
+        where: eq(credential.id, polled.credentialId ?? ""),
+      });
+      expect(row?.principalId).toBeNull();
+      expect(row?.secret).toEndWith("|minted");
+    });
   });
 });
