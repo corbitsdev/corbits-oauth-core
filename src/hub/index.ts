@@ -14,6 +14,7 @@ export {
   OAUTH_PROVIDER_METADATA_KEY,
   OAUTH_RESOURCE_METADATA_KEY,
   OAUTH_TOKEN_URL_METADATA_KEY,
+  type OAuthCredentialOwner,
 } from "./credentials.js";
 export {
   createOAuthRefreshStore,

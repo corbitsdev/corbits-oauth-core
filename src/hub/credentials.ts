@@ -108,13 +108,23 @@ export type PersistOAuthCredentialOpts = {
   readonly scopes: readonly string[];
   readonly tokens: BaseTokens;
   readonly metadata: Record<string, string>;
+  readonly owner?: OAuthCredentialOwner;
 };
+
+/**
+ * Who owns a login's credential. `principal` (the default) is the person who
+ * signed in. `tenant` is an organizational credential (`principalId` null),
+ * the only kind Interchange lets a catalog model provider or a credential
+ * binding use.
+ */
+export type OAuthCredentialOwner = "principal" | "tenant";
 
 export type OAuthCredentialTarget = {
   readonly tenantId: string;
   readonly principalId: string;
   readonly providerId: string;
   readonly name: string;
+  readonly owner?: OAuthCredentialOwner;
 };
 
 /** Why a login may not write to its target, as the stock route would answer. */
@@ -145,18 +155,31 @@ async function findByName(
   });
 }
 
-/** Only the caller's own OAuth login may be replaced in place. */
+/**
+ * Only the caller's own personal OAuth login may be replaced in place. An
+ * organizational credential is never replaced: changing one is the stock
+ * `PATCH /credentials/:id` and its manage grant, which a login mount's
+ * single grant does not check.
+ */
 function isOwnOAuthLogin(
   row: typeof credential.$inferSelect,
-  principalId: string,
+  target: OAuthCredentialTarget,
 ): boolean {
-  return row.type === "oauth_token" && row.principalId === principalId;
+  return (
+    target.owner !== "tenant" &&
+    row.type === "oauth_token" &&
+    row.principalId === target.principalId
+  );
+}
+
+function ownerPrincipalId(target: OAuthCredentialTarget): string | null {
+  return target.owner === "tenant" ? null : target.principalId;
 }
 
 /**
  * The stock `POST /credentials` rules, applied to a login's target: the
  * provider must sit in the caller's tenant ancestor chain, and the name may
- * only collide with the caller's own `oauth_token` credential.
+ * only collide with the caller's own personal `oauth_token` credential.
  */
 export async function checkOAuthCredentialTarget(
   db: DB["db"],
@@ -173,10 +196,7 @@ export async function checkOAuthCredentialTarget(
     return { status: 404, error: "Provider not found" };
   }
   const existing = await findByName(db, target);
-  if (
-    existing !== undefined &&
-    !isOwnOAuthLogin(existing, target.principalId)
-  ) {
+  if (existing !== undefined && !isOwnOAuthLogin(existing, target)) {
     return {
       status: 409,
       error: "Credential name already exists in this tenant",
@@ -189,7 +209,7 @@ export async function checkOAuthCredentialTarget(
  * Store freshly-minted OAuth tokens as a stock Interchange `oauth_token`
  * credential — the same row shape, AAD-bound encryption and creator grant
  * the platform's own `POST /credentials` writes, so nothing downstream can
- * tell a login-minted credential from a hand-entered one. Re-logging in
+ * tell a login-minted credential from a hand-entered one. A personal re-login
  * under the same name replaces the caller's own secrets in place; any other
  * rejected target throws `OAuthCredentialTargetRejectedError`.
  */
@@ -231,7 +251,7 @@ export async function persistOAuthCredential(
       id: credentialId,
       tenantId: opts.tenantId,
       providerId: opts.providerId,
-      principalId: opts.principalId,
+      principalId: ownerPrincipalId(opts),
       oauthClientId: null,
       name: opts.name,
       type: "oauth_token",
@@ -245,7 +265,9 @@ export async function persistOAuthCredential(
       updatedAt: now,
     });
     // Mirrors the stock route: a personal credential grants its owner
-    // durable `use` authority so no separate manual grant is needed.
+    // durable `use` authority so no separate manual grant is needed. An
+    // organizational credential is used by tenant ownership and gets none.
+    if (opts.owner === "tenant") return;
     await tx.insert(grantTable).values({
       id: generateId("grant"),
       tenantId: opts.tenantId,

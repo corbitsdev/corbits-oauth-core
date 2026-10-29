@@ -152,6 +152,8 @@ export function installOAuthLogin(
 }
 ```
 
+A login's credential belongs to the principal who signed in. Interchange lets a catalog model provider or a credential binding use only an organizational credential (`principalId` null), so a login meant to back one mounts with `owner: "tenant"`: the credential is stored with no principal and no creator grant, as the stock `POST /credentials` stores an organizational one, and it never replaces an existing credential of the same name: start each login under a new name, then repoint the consumer, through the stock routes and their grants. Such a mount writes organizational credentials, so gate it with an administrative grant.
+
 The refresher only updates the credential row. A process that loaded the old token into memory, such as a running sidecar (the agent runtime), keeps it until told to reload, so notify those processes from `onRefreshed`.
 
 The hub entry will move to a separate `@corbits/oauth-hub` package in a later release.
